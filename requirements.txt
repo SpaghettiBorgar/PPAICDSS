@@ -1,0 +1,32 @@
+absl-py==2.4.0
+astunparse==1.6.3
+f90nml==1.5.0
+flatbuffers==25.12.19
+flit_core @ file:///dev/shm/easybuild/easybuild.2024_10_30-01_57_56/Python/3.12.3/GCCcore-13.3.0/flit_core/flit_core-3.9.0
+gast==0.7.0
+google-pasta==0.2.0
+grpcio==1.78.1
+h5py==3.15.1
+keras==3.13.2
+libclang==18.1.1
+Markdown==3.10.2
+markdown-it-py==4.0.0
+mdurl==0.1.2
+ml_dtypes==0.5.4
+namex==0.1.0
+opt_einsum==3.4.0
+optree==0.19.0
+packaging @ file:///dev/shm/easybuild/easybuild.2024_10_30-01_57_56/Python/3.12.3/GCCcore-13.3.0/packaging/packaging-24.0
+protobuf==6.33.5
+rich==14.3.3
+setuptools @ file:///dev/shm/easybuild/easybuild.2024_10_30-01_57_56/Python/3.12.3/GCCcore-13.3.0/setuptools/setuptools-70.0.0
+setuptools-scm @ file:///dev/shm/easybuild/easybuild.2024_10_30-01_57_56/Python/3.12.3/GCCcore-13.3.0/setuptools_scm/setuptools_scm-8.1.0
+tensorboard==2.20.0
+tensorboard-data-server==0.7.2
+tensorflow==2.20.0
+termcolor==3.3.0
+tomli @ file:///dev/shm/easybuild/easybuild.2024_10_30-01_57_56/Python/3.12.3/GCCcore-13.3.0/tomli/tomli-2.0.1
+typing_extensions @ file:///dev/shm/easybuild/easybuild.2024_10_30-01_57_56/Python/3.12.3/GCCcore-13.3.0/typing_extensions/typing_extensions-4.11.0
+Werkzeug==3.1.6
+wheel @ file:///dev/shm/easybuild/easybuild.2024_10_30-01_57_56/Python/3.12.3/GCCcore-13.3.0/wheel/wheel-0.43.0
+wrapt==2.1.1
