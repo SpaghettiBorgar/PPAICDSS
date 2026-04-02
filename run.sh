@@ -1,5 +1,5 @@
 #!/bin/zsh
 echo starting
 source setup
-python xray_cnn.py
+python main.py
 echo done
