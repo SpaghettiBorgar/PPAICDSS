@@ -6,3 +6,4 @@ core.*
 data/
 logs/
 checkpoints/
+__pycache__/
