@@ -26,7 +26,7 @@ phases = {
 		lr=1e-3,
 		weight_decay=1e-3,
 		freeze_backend=True,
-		shuffle=True
+		shuffle=False
 	),
 	2: dict(
 		batchsize=128,
@@ -36,7 +36,7 @@ phases = {
 		lr=1e-4,
 		weight_decay=1e-3,
 		freeze_backend=False,
-		shuffle=True
+		shuffle=False
 	),
 	3: dict(
 		batchsize=64,
@@ -46,7 +46,7 @@ phases = {
 		lr=1e-4,
 		weight_decay=1e-4,
 		freeze_backend=False,
-		shuffle=True
+		shuffle=False
 	)
 }
 params = None
@@ -86,7 +86,8 @@ def train_xray_model(phase, checkpoint, device):
 		for param in model.densenet.parameters():
 			param.requires_grad = False
 
-	num_workers = min(os.cpu_count(), 16)
+	# num_workers = min(os.cpu_count(), 16)
+	num_workers=2
 	training_data = xray_data.XrayDataset(img_root, offset=0, size=200000, transform=transform)
 	testing_data = xray_data.XrayDataset(img_root, offset=-20, size=0, transform=transform)
 	train_dataloader = DataLoader(training_data, batch_size=params.batchsize, num_workers=num_workers, pin_memory=True, shuffle=params.shuffle)
