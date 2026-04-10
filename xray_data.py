@@ -1,6 +1,8 @@
 import os
 from collections import OrderedDict
+from multiprocessing import shared_memory, current_process
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -15,18 +17,19 @@ import data_prep
 metadata = pd.read_csv(f"{data_dir}/metadata.csv").set_index('dicom_id')
 annotations = pd.read_csv(f"{data_dir}/annotations.csv")
 
-chunk_cache_size = 3
+chunk_cache_size = 4
+chunk_cache = OrderedDict()
 
 
 class XrayDataset(Dataset):
-	def __init__(self, img_dir=img_root, offset=0, size=0, transform=None, use_chunks=True):
+	def __init__(self, img_dir=img_root, cache_index=None, offset=0, size=0, transform=None, use_chunks=True):
 		self.img_dir = img_dir
 		self.transform = transform
 		self.size = size if size > 0 else (len(annotations.index) - offset + size if offset >= 0 else -offset)
 		self.offset = offset if offset >= 0 else len(annotations.index) + offset
 		self.use_chunks = use_chunks
-
-		self.chunk_cache = OrderedDict()
+		self.cache_index = cache_index
+		self.cur_chunk_idx = None
 
 	def __len__(self):
 		return self.size
@@ -37,16 +40,43 @@ class XrayDataset(Dataset):
 
 		if self.use_chunks:
 			chunk_idx = index // data_prep.chunk_size
-			if chunk_idx not in self.chunk_cache:
-				print(f"loading chunk {chunk_idx}")
-				if len(self.chunk_cache) >= chunk_cache_size:
-					self.chunk_cache.popitem(last=False)
-				self.chunk_cache.update({chunk_idx: data_prep.get_chunk(chunk_idx)})
+			if not self.cur_chunk_idx == chunk_idx:
+				if self.cache_index is not None:
+					index_lock = self.cache_index['lock']
+					index_lock.acquire()
+					if chunk_idx in self.cache_index:
+						index_lock.release()
+						while not 'shm_name' in self.cache_index[chunk_idx]:
+							os.sched_yield()
+						with index_lock:
+							meta = self.cache_index[chunk_idx]
+						shm = shared_memory.SharedMemory(name=meta['shm_name'])
+						chunk_arr = np.ndarray(meta['shape'], dtype=np.dtype(meta['dtype']), buffer=shm.buf)
+					else:
+						self.cache_index[chunk_idx] = {}
+						index_lock.release()
+						chunk_tensor = data_prep.get_chunk(chunk_idx)[0][0]
+						arr = chunk_tensor.numpy()
+						shm = shared_memory.SharedMemory(create=True, size=arr.nbytes)
+						chunk_arr = np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)
+						chunk_arr[:] = arr[:]
+						with index_lock:
+							self.cache_index[chunk_idx] = {
+								'shm_name': shm.name,
+								'shape': arr.shape,
+								'dtype': str(arr.dtype)
+							}
+					self.cur_chunk_idx, self.cur_chunk, self.cur_shm = chunk_idx, torch.from_numpy(chunk_arr), shm
+				else:
+					if not chunk_idx in chunk_cache:
+						if len(chunk_cache) >= chunk_cache_size:
+							chunk_cache.popitem(last=False)
+						chunk_cache.update({chunk_idx: data_prep.get_chunk(chunk_idx)[0][0]})
 
-			self.chunk_cache.move_to_end(chunk_idx)
-			chunk = self.chunk_cache[chunk_idx]
+					chunk_cache.move_to_end(chunk_idx)
+					self.cur_chunk_idx, self.cur_chunk = chunk_idx, chunk_cache[chunk_idx]
 
-			img = chunk[0][0][index % data_prep.chunk_size]
+			img = self.cur_chunk[index % data_prep.chunk_size]
 		else:
 			img = decode_image(self.img_dir + '/' + sample.image_file)
 

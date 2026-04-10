@@ -1,3 +1,4 @@
+import multiprocessing
 import sys
 
 if sys.version_info >= (3, 14):
@@ -29,10 +30,12 @@ chunk_transform = v2.Compose([
 
 
 def get_chunk(chunk_idx):
+	print(f"[{multiprocessing.current_process().name}] loading chunk {chunk_idx}")
 	with zstd.open(get_chunk_path(chunk_idx), 'rb') as chunk_file:
 		chunk = torch.load(chunk_file)
 		chunk[0][0] = chunk[0][0].to(dtype=torch.uint8)
 		return chunk
+
 
 def generate_chunks(chunk_dir=chunk_dir, chunk_size=chunk_size, resolution=resolution):
 	dataset = xray_data.XrayDataset(transform=chunk_transform, use_chunks=False)
