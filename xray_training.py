@@ -71,11 +71,11 @@ def train_xray_model(phase, checkpoint, device):
 	optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr, weight_decay=params.weight_decay)
 	transform = v2.Compose([
 		v2.Resize(size=None, max_size=params.resolution, interpolation=InterpolationMode.BICUBIC),
-		v2.CenterCrop([params.resolution, params.resolution]),
 		v2.ToImage(),
 		v2.ToDtype(torch.float32, scale=True),
-		v2.Normalize(mean=[(0.485 + 0.456 + 0.406) / 3], std=[(0.229 + 0.224 + 0.225) / 3])
-	])
+		v2.Normalize(mean=[(0.485 + 0.456 + 0.406) / 3], std=[(0.229 + 0.224 + 0.225) / 3]),
+		v2.CenterCrop([params.resolution, params.resolution])
+	]) # TODO
 
 	vars(params).update(
 		criterion=criterion,

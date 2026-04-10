@@ -77,7 +77,7 @@ def run(model, params, train_dataloader, test_dataloader):
 
 	logs = {'loss': loss_history, 'time': time_history, 'acc': acc_history}
 	global do_save
-	do_save = lambda: save(model=model, params=params, logs=logs, name_suffix=params.phase)
+	do_save = lambda: save(model=model, params=params, logs=logs, name_suffix=str(params.phase))
 
 	for epoch in range(0, params.epochs):
 		print(f"Epoch {epoch}")
@@ -90,6 +90,6 @@ def run(model, params, train_dataloader, test_dataloader):
 		print(f"Acc:  {acc_history[-1]:.6f}")
 
 		if epoch % 1 == 0 and epoch != params.epochs - 1:
-			save(model, name_suffix=params.phase)
+			save(model, name_suffix=str(params.phase))
 
 	do_save()

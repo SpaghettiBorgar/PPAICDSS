@@ -24,14 +24,15 @@ chunk_transform = v2.Compose([
 	v2.Resize(size=None, max_size=resolution, interpolation=torchvision.transforms.InterpolationMode.BICUBIC),
 	v2.CenterCrop([resolution, resolution]),
 	v2.ToImage(),
-	v2.ToDtype(torch.int8)
+	v2.ToDtype(torch.uint8)
 ])
 
 
 def get_chunk(chunk_idx):
 	with zstd.open(get_chunk_path(chunk_idx), 'rb') as chunk_file:
-		return torch.load(chunk_file)
-
+		chunk = torch.load(chunk_file)
+		chunk[0][0] = chunk[0][0].to(dtype=torch.uint8)
+		return chunk
 
 def generate_chunks(chunk_dir=chunk_dir, chunk_size=chunk_size, resolution=resolution):
 	dataset = xray_data.XrayDataset(transform=chunk_transform, use_chunks=False)
