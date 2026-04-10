@@ -18,41 +18,39 @@ phases = {
 		lr=1e-3,
 		weight_decay=1e-3,
 		freeze_backend=True,
-		shuffle=False
 	),
 	1: dict(
 		batchsize=512,
-		batches=80,
 		epochs=3,
 		resolution=384,
 		lr=1e-3,
 		weight_decay=1e-3,
 		freeze_backend=True,
-		shuffle=False
 	),
 	2: dict(
 		batchsize=128,
-		batches=256,
 		epochs=10,
 		resolution=384,
 		lr=1e-4,
 		weight_decay=1e-3,
 		freeze_backend=False,
-		shuffle=False
 	),
 	3: dict(
 		batchsize=64,
-		batches=64,
 		epochs=4,
 		resolution=600,
 		lr=1e-4,
 		weight_decay=1e-4,
 		freeze_backend=False,
-		shuffle=False
 	)
 }
 params = None
 
+default_params = dict(
+	batches=0,
+	shuffle=False,
+	freeze_backend=False
+)
 
 def register_faulthandler(*args):
 	__import__('faulthandler').enable()
@@ -60,7 +58,8 @@ def register_faulthandler(*args):
 
 def train_xray_model(phase, checkpoint, device):
 	global params
-	params = SimpleNamespace(**phases[phase])
+	params = default_params | phases[phase]
+	params = SimpleNamespace(**params)
 	vars(params).update(
 		phase=phase,
 		checkpoint=checkpoint,
