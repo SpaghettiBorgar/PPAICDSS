@@ -12,6 +12,9 @@ from torchvision.io import decode_image
 data_dir = os.getenv("TRAIN_DATA_DIR", default="./data")
 img_root = f"{data_dir}/images"
 
+class_weights = OrderedDict({'Atelectasis': 36574, 'Cardiomegaly': 34348, 'Consolidation': 7353, 'Edema': 19519, 'Enlarged Cardiomediastinum': 5317, 'Fracture': 3604, 'Lung Lesion': 6418, 'Lung Opacity': 43730, 'No Finding': 89070, 'Pleural Effusion': 41462, 'Pleural Other': 1748, 'Pneumonia': 14726, 'Pneumothorax': 7547, 'Support Devices': 42806})
+total_samples = 221121
+
 import data_prep
 
 metadata = pd.read_csv(f"{data_dir}/metadata.csv").set_index('dicom_id')
@@ -54,8 +57,9 @@ class XrayDataset(Dataset):
 						chunk_arr = np.ndarray(meta['shape'], dtype=np.dtype(meta['dtype']), buffer=shm.buf)
 					else:
 						self.cache_index[chunk_idx] = {}
+						print(f"[{current_process().name}] {chunk_idx} ({len(self.cache_index) - 1}/{data_prep.num_chunks})")
 						index_lock.release()
-						chunk_tensor = data_prep.get_chunk(chunk_idx)[0][0]
+						chunk_tensor = data_prep.get_chunk(chunk_idx)
 						arr = chunk_tensor.numpy()
 						shm = shared_memory.SharedMemory(create=True, size=arr.nbytes)
 						chunk_arr = np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)
@@ -71,7 +75,7 @@ class XrayDataset(Dataset):
 					if not chunk_idx in chunk_cache:
 						if len(chunk_cache) >= chunk_cache_size:
 							chunk_cache.popitem(last=False)
-						chunk_cache.update({chunk_idx: data_prep.get_chunk(chunk_idx)[0][0]})
+						chunk_cache.update({chunk_idx: data_prep.get_chunk(chunk_idx)})
 
 					chunk_cache.move_to_end(chunk_idx)
 					self.cur_chunk_idx, self.cur_chunk = chunk_idx, chunk_cache[chunk_idx]
@@ -91,6 +95,3 @@ class XrayDataset(Dataset):
 
 		return (img, view), labels
 
-
-class_weights = OrderedDict({'Atelectasis': 36574, 'Cardiomegaly': 34348, 'Consolidation': 7353, 'Edema': 19519, 'Enlarged Cardiomediastinum': 5317, 'Fracture': 3604, 'Lung Lesion': 6418, 'Lung Opacity': 43730, 'No Finding': 89070, 'Pleural Effusion': 41462, 'Pleural Other': 1748, 'Pneumonia': 14726, 'Pneumothorax': 7547, 'Support Devices': 42806})
-total_samples = 221121
