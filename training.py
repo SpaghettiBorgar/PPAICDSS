@@ -19,10 +19,10 @@ def train(model, params, train_loader, epoch, batches=0):
 		params.optimizer.step()
 		losses.append(loss.item())
 		if batch_idx % 1 == 0:
-			num_samples = len(train_loader.dataset) if batches == 0 else min(len(train_loader.dataset), batches * train_loader.batch_size)
+			n_total = len(train_loader.dataset) if batches == 0 else min(len(train_loader.dataset), batches * params.batchsize)
+			n_processed = min((batch_idx + 1) * params.batchsize, n_total)
 			print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-				epoch, (batch_idx + 1) * len(img), num_samples,
-					   100. * (batch_idx * params.batchsize) / num_samples, loss.item()))
+			epoch, n_processed, n_total, 100. * n_processed // n_total, loss.item()))
 		if batch_idx + 1 == batches:
 			break
 
@@ -56,7 +56,7 @@ def save(model=None, params=None, logs=None, name_suffix=""):
 			o = vars(params).copy()
 			if logs is not None:
 				o.update(
-					epoch_time=sum(logs['time']) / min(len(logs['time']), 1),
+					epoch_time=sum(logs['time']) / max(len(logs['time']), 1),
 					loss_history=logs['loss'],
 					acc_history=logs['acc']
 				)

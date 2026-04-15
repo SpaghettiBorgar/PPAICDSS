@@ -79,7 +79,7 @@ def parse_args():
 	parser.add_argument("paths", nargs="*", help="Paths to log files or latest if omitted")
 	parser.add_argument("--smooth", type=float, default=0.0, help="Gaussian smoothing sigma")
 	parser.add_argument("-o", "--output", type=str, default=None, help="Output image path. Otherwise show figure")
-	parser.add_argument("--key", default=["loss"], help="Series to plot (loss, acc, time)")
+	parser.add_argument("--key", default="loss", help="Series to plot (loss, acc, time)")
 	return parser.parse_args()
 
 
