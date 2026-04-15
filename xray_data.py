@@ -1,6 +1,7 @@
 import os
 from collections import OrderedDict
 from multiprocessing import shared_memory, current_process
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -25,13 +26,15 @@ chunk_cache = OrderedDict()
 
 
 class XrayDataset(Dataset):
-	def __init__(self, img_dir=img_root, cache_index=None, offset=0, size=0, transform=None, use_chunks=True):
+	def __init__(self, img_dir=img_root, cache_index=None, shm_manager=None, offset=0, size=0, transform=None, use_chunks=True):
 		self.img_dir = img_dir
 		self.transform = transform
 		self.size = size if size > 0 else (len(annotations.index) - offset + size if offset >= 0 else -offset)
 		self.offset = offset if offset >= 0 else len(annotations.index) + offset
 		self.use_chunks = use_chunks
+		assert (cache_index is None) == (shm_manager is None)
 		self.cache_index = cache_index
+		self.smm=shm_manager
 		self.cur_chunk_idx = None
 
 	def __len__(self):
@@ -61,7 +64,7 @@ class XrayDataset(Dataset):
 						index_lock.release()
 						chunk_tensor = data_prep.get_chunk(chunk_idx)
 						arr = chunk_tensor.numpy()
-						shm = shared_memory.SharedMemory(create=True, size=arr.nbytes)
+						shm = self.smm.SharedMemory(size=arr.nbytes)
 						chunk_arr = np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)
 						chunk_arr[:] = arr[:]
 						with index_lock:
@@ -94,4 +97,3 @@ class XrayDataset(Dataset):
 		view = F.one_hot(torch.tensor([view]).long(), num_classes=len(_views) + 1).squeeze()
 
 		return (img, view), labels
-

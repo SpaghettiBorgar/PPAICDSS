@@ -1,5 +1,5 @@
 import multiprocessing as mp
-from multiprocessing.shared_memory import SharedMemory
+from multiprocessing.managers import SharedMemoryManager
 from types import SimpleNamespace
 
 from torch.utils.data import DataLoader
@@ -94,27 +94,29 @@ def train_xray_model(phase, checkpoint, device):
 	num_workers = min(os.cpu_count(), 16)
 
 	manager = mp.Manager()
+	smm = SharedMemoryManager()
+	smm.start()
 	shared_index = manager.dict()
 	shared_index['lock'] = manager.Lock()
 
 	training_data = xray_data.XrayDataset(img_root, cache_index=shared_index, offset=0, size=200000, transform=transform)
 	testing_data = xray_data.XrayDataset(img_root, cache_index=shared_index, offset=-20, size=0, transform=transform)
+	training_data = xray_data.XrayDataset(img_root, cache_index=shared_index, shm_manager=smm, offset=0, size=200000, transform=transform)
+	testing_data = xray_data.XrayDataset(img_root, cache_index=shared_index, shm_manager=smm, offset=-20, size=0, transform=transform)
 	loader_args = dict(
 		batch_size=params.batchsize,
 		shuffle=params.shuffle,
 		pin_memory=True,
 		num_workers=num_workers,
-		persistent_workers=True,
-		worker_init_fn=register_faulthandler
+		prefetch_factor=4 if num_workers > 0 else None,
+		persistent_workers=num_workers > 0,
+		worker_init_fn=register_faulthandler if num_workers > 0 else None
 	)
 	train_dataloader = DataLoader(training_data, **loader_args)
 	test_dataloader = DataLoader(testing_data, **loader_args)
 
-	training.run(model, params, train_dataloader, test_dataloader)
-
-	# cleanup
-	del shared_index['lock']
-	for meta in shared_index.values():
-		shm = SharedMemory(name=meta['shm_name'])
-		shm.close()
-		shm.unlink()
+	try:
+		training.run(model, params, train_dataloader, test_dataloader)
+	finally:
+		smm.shutdown()
+		manager.shutdown()
