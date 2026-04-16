@@ -24,14 +24,14 @@ phases = {
 	),
 	1: dict(
 		batchsize=512,
-		epochs=3,
+		epochs=6,
 		resolution=384,
 		lr=1e-3,
 		weight_decay=1e-3,
 		freeze_backend=True,
 	),
 	2: dict(
-		batchsize=128,
+		batchsize=160,
 		epochs=10,
 		resolution=384,
 		lr=1e-4,
@@ -51,7 +51,7 @@ params = None
 
 default_params = dict(
 	batches=0,
-	shuffle=False,
+	shuffle=True,
 	freeze_backend=False,
 	save=True
 )
@@ -83,9 +83,8 @@ def train_xray_model(phase, checkpoint, device):
 		v2.Resize(size=None, max_size=params.resolution, interpolation=InterpolationMode.BICUBIC),
 		v2.ToImage(),
 		v2.ToDtype(torch.float32, scale=True),
-		v2.Normalize(mean=[(0.485 + 0.456 + 0.406) / 3], std=[(0.229 + 0.224 + 0.225) / 3]),
-		v2.CenterCrop([params.resolution, params.resolution])
-	]) # TODO
+		# v2.CenterCrop([params.resolution, params.resolution])
+	])
 
 	vars(params).update(
 		criterion=criterion,
@@ -96,7 +95,7 @@ def train_xray_model(phase, checkpoint, device):
 		for param in model.densenet.parameters():
 			param.requires_grad = False
 
-	num_workers = min(os.cpu_count(), 16)
+	num_workers = min(os.cpu_count(), 8)
 
 	manager = mp.Manager()
 	smm = SharedMemoryManager()
@@ -104,10 +103,9 @@ def train_xray_model(phase, checkpoint, device):
 	shared_index = manager.dict()
 	shared_index['lock'] = manager.Lock()
 
-	training_data = xray_data.XrayDataset(img_root, cache_index=shared_index, offset=0, size=200000, transform=transform)
-	testing_data = xray_data.XrayDataset(img_root, cache_index=shared_index, offset=-20, size=0, transform=transform)
 	training_data = xray_data.XrayDataset(img_root, cache_index=shared_index, shm_manager=smm, offset=0, size=200000, transform=transform)
-	testing_data = xray_data.XrayDataset(img_root, cache_index=shared_index, shm_manager=smm, offset=-20, size=0, transform=transform)
+	testing_data = xray_data.XrayDataset(img_root, cache_index=shared_index, shm_manager=smm, offset=-4000, size=0, transform=transform)
+
 	loader_args = dict(
 		pin_memory=True,
 		num_workers=num_workers,

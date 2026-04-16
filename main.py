@@ -11,6 +11,6 @@ signal.signal(signal.SIGTERM, lambda sig, frame: training.do_save() or sys.exit(
 if __name__ == '__main__':
 	print("Starting")
 	try:
-		xray_training.train_xray_model("testing", None, "cuda")
+		xray_training.train_xray_model('testing', None, f'cuda:{min(1, torch.cuda.device_count() - 1)}')
 	except KeyboardInterrupt:
 		print("Terminating")
