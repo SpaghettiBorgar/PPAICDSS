@@ -18,10 +18,10 @@ def train(model, params, train_loader, epoch, batches=0):
 		loss.backward()
 		params.optimizer.step()
 		losses.append(loss.item())
-		if batch_idx % 1 == 0:
+		if batch_idx % (1 if params.phase == 'testing' else 4) == 0:
 			n_total = len(train_loader.dataset) if batches == 0 else min(len(train_loader.dataset), batches * params.batchsize)
 			n_processed = min((batch_idx + 1) * params.batchsize, n_total)
-			print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+			print('Train Epoch {}: [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
 			epoch, n_processed, n_total, 100. * n_processed // n_total, loss.item()))
 		if batch_idx + 1 == batches:
 			break
@@ -49,7 +49,7 @@ def test(model, params, test_loader, batches=0):
 def save(model=None, params=None, logs=None, name_suffix=""):
 	timestamp = datetime.today().strftime('%m_%d_%H%M%S')
 	name = timestamp + ('_' + name_suffix if len(name_suffix) > 0 else '')
-	print(f"saving as {name}")
+	print(f"Saving as {name}")
 
 	if params is not None:
 		with open(f"./logs/train_{name}.log", "w+") as f:
@@ -80,10 +80,14 @@ def run(model, params, train_dataloader, test_dataloader):
 	do_save = lambda: save(model=model, params=params, logs=logs, name_suffix=str(params.phase))
 
 	for epoch in range(0, params.epochs):
-		print(f"Epoch {epoch}")
+		print(f"Begin epoch {epoch}")
 		start = time.time()
+
 		loss_history += train(model, params, train_dataloader, epoch, params.batches)
-		time_history.append(time.time() - start)
+
+		epoch_time = time.time() - start
+		time_history.append(epoch_time)
+		print(f"Epoch {epoch} took {epoch_time:.2f}s")
 
 		acc = test(model, params, test_dataloader, 2)
 		acc_history.append(acc)

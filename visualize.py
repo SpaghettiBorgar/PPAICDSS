@@ -6,13 +6,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 
-try:
-	matplotlib.use('qt5agg')
-except:
-	pass
-import matplotlib.pyplot as plt
+print(f"DISPLAY: {os.getenv("DISPLAY", default="unset")}")
+print(f"MPL Backend: {matplotlib.get_backend()}")
 
 
 def vis_batch(t, nrow: int = None, ax=None):

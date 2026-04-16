@@ -1,3 +1,4 @@
+print("Initializing")
 import signal
 import sys
 
