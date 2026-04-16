@@ -89,7 +89,8 @@ def run(model, params, train_dataloader, test_dataloader):
 		acc_history.append(acc)
 		print(f"Acc:  {acc_history[-1]:.6f}")
 
-		if epoch % 1 == 0 and epoch != params.epochs - 1:
+		if params.save and epoch % 1 == 0 and epoch != params.epochs - 1:
 			save(model, name_suffix=str(params.phase))
 
-	do_save()
+	if params.save:
+		do_save()

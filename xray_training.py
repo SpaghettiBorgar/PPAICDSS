@@ -18,6 +18,7 @@ phases = {
 		lr=1e-3,
 		weight_decay=1e-3,
 		freeze_backend=True,
+		save=False
 	),
 	1: dict(
 		batchsize=512,
@@ -49,8 +50,10 @@ params = None
 default_params = dict(
 	batches=0,
 	shuffle=False,
-	freeze_backend=False
+	freeze_backend=False,
+	save=True
 )
+
 
 def register_faulthandler(*args):
 	__import__('faulthandler').enable()
