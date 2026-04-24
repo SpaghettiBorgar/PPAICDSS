@@ -5,6 +5,7 @@ from datetime import datetime
 import torch
 import torch.nn.functional as F
 
+import visualize
 
 def train(model, params, train_loader, epoch, batches=0):
 	model.train()

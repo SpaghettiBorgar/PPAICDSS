@@ -1,0 +1,8 @@
+#!/bin/zsh
+if [ "$GPU" = "rocm" ]; then
+  uv run --extra rocm "$@"
+elif [ "$GPU" = "cuda" ]; then
+  uv run --extra cuda "$@"
+else
+  uv run "$@"
+fi

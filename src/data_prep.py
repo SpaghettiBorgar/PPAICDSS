@@ -17,14 +17,14 @@ import torch
 import os
 from torch.utils.data import Dataset
 
-chunk_dir = xray_data.data_dir + '/chunks'
+chunk_dir = xray_data.DATA_DIR + '/chunks'
 chunk_size = 128
 resolution = 600
 
 get_chunk_idx = lambda sample_idx: sample_idx // chunk_size
 get_chunk_path = lambda chunk_idx: f"{chunk_dir}/chunk_{chunk_idx * chunk_size:06d}.pt.zstd"
 
-num_chunks = int(math.ceil(xray_data.total_samples / chunk_size))
+num_chunks = int(math.ceil(xray_data.TOTAL_SAMPLES / chunk_size))
 
 chunk_transform = v2.Compose([
 	v2.Resize(size=None, max_size=resolution, interpolation=torchvision.transforms.InterpolationMode.BICUBIC),

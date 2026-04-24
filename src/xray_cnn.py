@@ -10,7 +10,7 @@ img_root = f"{data_dir}/images"
 checkpoints_dir = "./checkpoints"
 
 class XrayModel(nn.Module):
-	def __init__(self, num_labels=14, xray_view_dim=0, weights=None):
+	def __init__(self, num_labels=14, xray_view_dim=5, weights=None):
 		super().__init__()
 
 		self.xray_view_dim = xray_view_dim

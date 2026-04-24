@@ -9,7 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-print(f"DISPLAY: {os.getenv("DISPLAY", default="unset")}")
+#print(f"DISPLAY: {os.getenv("DISPLAY", default="unset")}")
 print(f"MPL Backend: {matplotlib.get_backend()}")
 
 

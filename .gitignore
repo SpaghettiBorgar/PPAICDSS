@@ -1,9 +1,21 @@
 .ipynb_checkpoints
 venv*
+.venv
+*.env
+setup
 core.*
 .idea/
+.vscode/
 *.pt
 data/
 logs/
+notes/
 checkpoints/
+# uv
+uv.lock
 __pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info

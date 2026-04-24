@@ -74,7 +74,7 @@ def train_xray_model(phase, checkpoint, device):
 	weights = None if params.checkpoint is None else torch.load(f"{checkpoints_dir}/{params.checkpoint}", weights_only=True)
 	model = XrayModel(num_labels=14, xray_view_dim=5, weights=weights).to(device)
 
-	class_weights = xray_data.total_samples / torch.tensor(list(xray_data.class_weights.values())) - 1
+	class_weights = xray_data.TOTAL_SAMPLES / torch.tensor(list(xray_data.CLASS_WEIGHTS.values())) - 1
 	class_weights = class_weights.to(device=device)
 
 	criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights)

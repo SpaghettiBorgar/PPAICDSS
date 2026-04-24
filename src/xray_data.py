@@ -10,23 +10,24 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 from torchvision.io import decode_image
 
-data_dir = os.getenv("TRAIN_DATA_DIR", default="./data")
-img_root = f"{data_dir}/images"
+DATA_DIR = os.getenv("TRAIN_DATA_DIR", default="./data")
+IMG_ROOT = f"{DATA_DIR}/images"
 
-class_weights = OrderedDict({'Atelectasis': 36574, 'Cardiomegaly': 34348, 'Consolidation': 7353, 'Edema': 19519, 'Enlarged Cardiomediastinum': 5317, 'Fracture': 3604, 'Lung Lesion': 6418, 'Lung Opacity': 43730, 'No Finding': 89070, 'Pleural Effusion': 41462, 'Pleural Other': 1748, 'Pneumonia': 14726, 'Pneumothorax': 7547, 'Support Devices': 42806})
-total_samples = 221121
+LABELS = ["Atelectasis","Cardiomegaly","Consolidation","Edema","Enlarged Cardiomediastinum","Fracture","Lung Lesion","Lung Opacity","No Finding","Pleural Effusion","Pleural Other","Pneumonia","Pneumothorax","Support Devices"]
+CLASS_WEIGHTS = OrderedDict({'Atelectasis': 36574, 'Cardiomegaly': 34348, 'Consolidation': 7353, 'Edema': 19519, 'Enlarged Cardiomediastinum': 5317, 'Fracture': 3604, 'Lung Lesion': 6418, 'Lung Opacity': 43730, 'No Finding': 89070, 'Pleural Effusion': 41462, 'Pleural Other': 1748, 'Pneumonia': 14726, 'Pneumothorax': 7547, 'Support Devices': 42806})
+TOTAL_SAMPLES = 221121
 
 import data_prep
 
-metadata = pd.read_csv(f"{data_dir}/metadata.csv").set_index('dicom_id')
-annotations = pd.read_csv(f"{data_dir}/annotations.csv")
+metadata = pd.read_csv(f"{DATA_DIR}/metadata.csv").set_index('dicom_id')
+annotations = pd.read_csv(f"{DATA_DIR}/annotations.csv")
 
 chunk_cache_size = 4
 chunk_cache = OrderedDict()
 
 
 class XrayDataset(Dataset):
-	def __init__(self, img_dir=img_root, cache_index=None, shm_manager=None, offset=0, size=0, transform=None, use_chunks=True):
+	def __init__(self, img_dir=IMG_ROOT, cache_index=None, shm_manager=None, offset=0, size=0, transform=None, use_chunks=True):
 		self.img_dir = img_dir
 		self.transform = transform
 		self.size = size if size > 0 else (len(annotations.index) - offset + size if offset >= 0 else -offset)
@@ -40,7 +41,7 @@ class XrayDataset(Dataset):
 	def __len__(self):
 		return self.size
 
-	def __getitem__(self, index):
+	def __getitem__(self, index) -> Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
 		index += self.offset
 		sample = annotations.loc[index]
 
