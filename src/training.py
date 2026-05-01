@@ -4,18 +4,38 @@ from datetime import datetime
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 import visualize
+from util.mapping import tree_map
 
-def train(model, params, train_loader, epoch, batches=0):
+from torch.utils.data._utils.collate import default_collate
+
+def tuple_preserving_collate(batch):
+	return _lists_to_tuples(default_collate(batch))
+
+
+def _lists_to_tuples(x):
+	if isinstance(x, list):
+		return tuple(_lists_to_tuples(v) for v in x)
+	if isinstance(x, dict):
+		return {k: _lists_to_tuples(v) for k, v in x.items()}
+	return x
+
+def fix_collate(data_loader: DataLoader):
+	if data_loader.collate_fn == default_collate:
+		data_loader.collate_fn = tuple_preserving_collate
+
+def train(model: torch.nn.Module, params, train_loader: DataLoader, epoch, batches=0):
 	model.train()
 	losses = []
 
-	for batch_idx, ((img, view), target) in enumerate(train_loader):
-		img, view, target = img.to(params.device), view.to(params.device), target.to(params.device)
+	for batch_idx, (inp, target) in enumerate(train_loader):
+		inp, target = tree_map(lambda t: t.to(params.device), (inp, target))
 		params.optimizer.zero_grad()
-		output = model(img, xray_view=view)
+		output = model(inp)
 		loss = params.criterion(output, target)
+
 		loss.backward()
 		params.optimizer.step()
 		losses.append(loss.item())
@@ -30,14 +50,14 @@ def train(model, params, train_loader, epoch, batches=0):
 	return losses
 
 
-def test(model, params, test_loader, batches=0):
+def test(model: torch.nn.Module, params, test_loader: DataLoader, batches=0):
 	model.eval()
 
 	accs = []
 	with torch.no_grad():
-		for batch_idx, ((img, view), target) in enumerate(test_loader):
-			img, view, target = img.to(params.device), view.to(params.device), target.to(params.device)
-			output = model(img, xray_view=view)
+		for batch_idx, (inp, target) in enumerate(test_loader):
+			inp, target = tree_map(lambda t: t.to(params.device), (inp, target))
+			output = model(inp)
 			output = F.sigmoid(output)
 			acc = torch.norm(target - output, dim=1, p=1).mean()
 			accs.append(acc.item())
@@ -70,11 +90,14 @@ def save(model=None, params=None, logs=None, name_suffix=""):
 do_save = lambda: None
 
 
-def run(model, params, train_dataloader, test_dataloader):
+def run(model: torch.nn.Module, params, train_dataloader: DataLoader, test_dataloader: DataLoader):
 	print(params)
 	loss_history = []
 	time_history = []
 	acc_history = []
+
+	fix_collate(train_dataloader)
+	fix_collate(test_dataloader)
 
 	logs = {'loss': loss_history, 'time': time_history, 'acc': acc_history}
 	global do_save

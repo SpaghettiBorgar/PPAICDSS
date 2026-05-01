@@ -1,4 +1,5 @@
 import os
+from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -46,16 +47,16 @@ class XrayModel(nn.Module):
 		if weights is not None:
 			self.load_state_dict(weights)
 
-	def forward(self, x, xray_view=None):
+	def forward(self, x: Tuple[torch.Tensor, torch.Tensor] | torch.Tensor):
+		if isinstance(x, tuple):
+			x, xray_view = x
+		else:
+			xray_view = torch.zeros((x.shape[0], self.xray_view_dim), device=x.device)
+
 		x = self.densenet(x)
+		xray_view = self.metanet(xray_view.to(x.dtype))
 
-		if xray_view is None:
-			xray_view = torch.zeros((x.shape[0], self.xray_view_dim))
-		xray_view = xray_view.to(torch.float32)
-
-		xray_view = self.metanet(xray_view)
 		x = torch.cat([x, xray_view], dim=1)
-
 		x = self.classifier(x)
 
 		return x
