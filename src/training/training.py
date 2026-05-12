@@ -5,11 +5,11 @@ from datetime import datetime
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.utils.data._utils.collate import default_collate
 
-import visualize
+from training.params import Params
 from util.mapping import tree_map
 
-from torch.utils.data._utils.collate import default_collate
 
 def tuple_preserving_collate(batch):
 	return _lists_to_tuples(default_collate(batch))
@@ -22,36 +22,44 @@ def _lists_to_tuples(x):
 		return {k: _lists_to_tuples(v) for k, v in x.items()}
 	return x
 
+
 def fix_collate(data_loader: DataLoader):
 	if data_loader.collate_fn == default_collate:
 		data_loader.collate_fn = tuple_preserving_collate
 
-def train(model: torch.nn.Module, params, train_loader: DataLoader, epoch, batches=0):
+
+def train(model: torch.nn.Module, params: Params, train_loader: DataLoader, epoch):
+	fix_collate(train_loader)
 	model.train()
 	losses = []
 
+	optimizer = params.get_optimizer()
+	criterion = params.get_criterion()
+
 	for batch_idx, (inp, target) in enumerate(train_loader):
 		inp, target = tree_map(lambda t: t.to(params.device), (inp, target))
-		params.optimizer.zero_grad()
+		optimizer.zero_grad()
 		output = model(inp)
-		loss = params.criterion(output, target)
+		loss = criterion(output, target)
 
 		loss.backward()
-		params.optimizer.step()
+		optimizer.step()
 		losses.append(loss.item())
 		if batch_idx % (1 if params.phase == 'testing' else 4) == 0:
-			n_total = len(train_loader.dataset) if batches == 0 else min(len(train_loader.dataset), batches * params.batchsize)
-			n_processed = min((batch_idx + 1) * params.batchsize, n_total)
+			n_total = len(train_loader.dataset) if params.batches == 0 else min(len(train_loader.dataset), params.batches * params.batch_size)
+			n_processed = min((batch_idx + 1) * params.batch_size, n_total)
 			print('Train Epoch {}: [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-			epoch, n_processed, n_total, 100. * n_processed // n_total, loss.item()))
-		if batch_idx + 1 == batches:
+				epoch, n_processed, n_total, 100. * n_processed // n_total, loss.item()))
+		if batch_idx + 1 == params.batches:
 			break
 
 	return losses
 
 
-def test(model: torch.nn.Module, params, test_loader: DataLoader, batches=0):
+def test(model: torch.nn.Module, params: Params, test_loader: DataLoader):
+	fix_collate(test_loader)
 	model.eval()
+	criterion = params.get_criterion()
 
 	accs = []
 	with torch.no_grad():
@@ -61,7 +69,7 @@ def test(model: torch.nn.Module, params, test_loader: DataLoader, batches=0):
 			output = F.sigmoid(output)
 			acc = torch.norm(target - output, dim=1, p=1).mean()
 			accs.append(acc.item())
-			if batch_idx + 1 == batches:
+			if batch_idx + 1 == params.batches:
 				break
 
 		return sum(accs) / len(accs)
@@ -90,14 +98,11 @@ def save(model=None, params=None, logs=None, name_suffix=""):
 do_save = lambda: None
 
 
-def run(model: torch.nn.Module, params, train_dataloader: DataLoader, test_dataloader: DataLoader):
+def run(model: torch.nn.Module, params: Params, train_dataloader: DataLoader, test_dataloader: DataLoader):
 	print(params)
 	loss_history = []
 	time_history = []
 	acc_history = []
-
-	fix_collate(train_dataloader)
-	fix_collate(test_dataloader)
 
 	logs = {'loss': loss_history, 'time': time_history, 'acc': acc_history}
 	global do_save
@@ -107,13 +112,13 @@ def run(model: torch.nn.Module, params, train_dataloader: DataLoader, test_datal
 		print(f"Begin epoch {epoch}")
 		start = time.time()
 
-		loss_history += train(model, params, train_dataloader, epoch, params.batches)
+		loss_history += train(model, params, train_dataloader, epoch)
 
 		epoch_time = time.time() - start
 		time_history.append(epoch_time)
 		print(f"Epoch {epoch} took {epoch_time:.2f}s")
 
-		acc = test(model, params, test_dataloader, 2)
+		acc = test(model, params, test_dataloader)
 		acc_history.append(acc)
 		print(f"Acc:  {acc_history[-1]:.6f}")
 

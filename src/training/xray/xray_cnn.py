@@ -10,19 +10,20 @@ data_dir = os.getenv("TRAIN_DATA_DIR", default="./data")
 img_root = f"{data_dir}/images"
 checkpoints_dir = "./checkpoints"
 
+
 class XrayModel(nn.Module):
 	def __init__(self, num_labels=14, xray_view_dim=5, weights=None):
 		super().__init__()
 
 		self.xray_view_dim = xray_view_dim
 
-		self.densenet = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1)
-		old_weights = self.densenet.features.conv0.weight.data
-		self.densenet.features.conv0 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-		self.densenet.features.conv0.weight.data = old_weights.mean(dim=1, keepdim=True)
+		self.backend = models.resnet34(weights=models.ResNet34_Weights)
+		old_weights = self.backend.conv1.weight.data
+		self.backend.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+		self.backend.conv1.weight.data = old_weights.mean(dim=1, keepdim=True)
 
-		num_features = self.densenet.classifier.in_features
-		self.densenet.classifier = nn.Identity()
+		num_features = self.backend.fc.in_features
+		self.backend.fc = nn.Identity()
 		self.classifier = nn.Linear(num_features + xray_view_dim, num_labels)
 
 		self.metanet = nn.Sequential(
@@ -53,7 +54,7 @@ class XrayModel(nn.Module):
 		else:
 			xray_view = torch.zeros((x.shape[0], self.xray_view_dim), device=x.device)
 
-		x = self.densenet(x)
+		x = self.backend(x)
 		xray_view = self.metanet(xray_view.to(x.dtype))
 
 		x = torch.cat([x, xray_view], dim=1)

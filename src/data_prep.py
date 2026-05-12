@@ -12,7 +12,7 @@ else:
 import torchvision.transforms
 from torchvision.transforms import v2
 
-import xray_data
+from training.xray import xray_data
 import torch
 import os
 from torch.utils.data import Dataset

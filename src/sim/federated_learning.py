@@ -1,45 +1,42 @@
 import asyncio
-import copy
 import logging
 from typing import List
 
 import torch
-from torchvision.transforms import InterpolationMode, v2
 
 from sim import *
-import xray_data
-import xray_training
 from sim.aggregator import Aggregator
 from sim.fl_client import FederatedLearningClient
 from sim.hospital import Hospital
 from sim.transport import InProcessTransport
-from util.weights import Weights
+from training.xray import xray_data
+from training.xray.xray_data import XrayDataset
+from training.xray.xray_params import XrayParams
 from util.random import random_partitions
-from xray_cnn import XrayModel
-from xray_data import XrayDataset
 
 logger = logging.getLogger(__name__)
 
 
-def create_participants(num_hospitals: int, params, cache_index=None, shm_manager=None, seed: int = 0) -> List[Hospital]:
+def create_participants(num_hospitals: int, seed: int = 0, devices=None) -> List[Hospital]:
 	hospitals = []
 	partitions = random_partitions(range(xray_data.TOTAL_SAMPLES), num_hospitals, seed=seed, evenness=0.8)
 	for i, p in enumerate(partitions):
-		hosp = Hospital(f"Hospital {i}")
+		hosp = Hospital(f"Hospital {i}", device=devices[i % len(devices)] if devices is not None else "cuda")
 		hosp.add_project('cxr', FederatedLearningClient(
 			hosp.name,
-			XrayDataset(offset=p.start, size=len(p), cache_index=cache_index, shm_manager=shm_manager, transform=params.transform),
+			XrayDataset(offset=p.start, size=len(p)),
 		))
 		hospitals.append(hosp)
 	return hospitals
 
 
-def initialize_participants(hospitals: List[Hospital], model: torch.nn.Module, weights: Weights, params, aggregator: Aggregator):
+def initialize_participants(hospitals: List[Hospital], aggregator: Aggregator, **kwargs):
 	for hosp in hospitals:
+		params = XrayParams('testing', device=hosp.device, **kwargs)
 		client = hosp.fl_projects['cxr']
-		client.set_model(copy.deepcopy(model).to(params.device))
-		client.set_weights(weights.detach())
 		client.set_params(params)
+		client.dataset.transform = params.get_transform()
+		client.set_model(params.get_model())
 		establish_connection(client, aggregator)
 		client.start()
 
@@ -56,37 +53,33 @@ def establish_connection(client: FederatedLearningClient, aggregator: Aggregator
 
 
 async def run_simulation():
-	device = "cuda"
+	device_count = torch.cuda.device_count()
+	devices = [f"cuda:{i}" for i in range(device_count)]
 
-	init_model = XrayModel()
-	init_weights = Weights(init_model)
-	class_weights = xray_data.TOTAL_SAMPLES / torch.tensor(list(xray_data.CLASS_WEIGHTS.values())) - 1
-	class_weights = class_weights.to(device=device)
+	xray_data.setup_shm()
 
-	params = xray_training.make_params('testing', device=device)
-	params.transform = v2.Compose([
-		v2.Resize(size=None, max_size=params.resolution, interpolation=InterpolationMode.BICUBIC),
-		v2.ToImage(),
-		v2.ToDtype(torch.float32, scale=True),
-		# v2.CenterCrop([params.resolution, params.resolution])
-	])
-	params.criterion = torch.nn.BCEWithLogitsLoss(pos_weight=class_weights)
-	params.optimizer = torch.optim.AdamW(init_model.parameters(), lr=params.lr, weight_decay=params.weight_decay)
-
-	hospitals = create_participants(3, params)
+	hospitals = create_participants(3, devices=devices)
 	aggregator = Aggregator()
 	aggregator.start()
 	logger.info("Aggregator started")
-	initialize_participants(hospitals, init_model, init_weights, params, aggregator)
+	initialize_participants(hospitals, aggregator)
 	logger.info("Clients initialized")
 	await setup_federation(hospitals)
 	logger.info("Federation set up")
 
 	sim_start_time = time.time()
 	await aggregator.start_new_round()
-	await aggregator.loop_task
+	logger.info("Waiting for round end")
+	await aggregator.round_end_event.wait()
+	logger.info("Rounds ended, shutting down")
+	aggregator.shutdown()
+	for hosp in hospitals:
+		hosp.fl_projects['cxr'].shutdown()
+	logger.info("Simulation done")
 
+	xray_data.shutdown_shm()
 
 if __name__ == '__main__':
-	logging.basicConfig(level=logging.INFO)
+	logging.basicConfig(level=logging.DEBUG)
 	asyncio.run(run_simulation(), debug=True)
+	logger.info("Terminating")

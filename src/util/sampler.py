@@ -1,6 +1,6 @@
-import random
-
 from torch.utils.data import Sampler
+
+import random
 
 
 class BlockShuffleBatchSampler(Sampler):

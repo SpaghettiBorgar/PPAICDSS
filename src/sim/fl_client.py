@@ -4,24 +4,26 @@ import sys
 import traceback
 
 import torch.nn
-from torch.utils.data import DataLoader
 
-import training
 from sim.messages import *
 from sim.transport import TransportSocket
+from training import training
+from training.params import Params
+from training.xray import xray_training
 
 logger = logging.getLogger(__name__)
 
 
 class FederatedLearningClient:
 	client_id: ClientID
+	dataset: torch.utils.data.Dataset
 	model: torch.nn.Module
 	local_rev: ModelRev
 	global_rev: ModelRev
 	global_weights: Weights
 	aggregator: TransportSocket
 	current_round: Round
-	training_params: object
+	training_params: Params
 	waiting_for_update: bool
 	training: bool
 	training_task: asyncio.Task
@@ -38,6 +40,10 @@ class FederatedLearningClient:
 
 	def start(self):
 		self.loop_task = asyncio.create_task(self.loop())
+
+	def shutdown(self):
+		logger.info("[%s] shutting down", self.client_id)
+		self.loop_task.cancel()
 
 	async def loop(self):
 		logger.info("Client %s running", self.client_id)
@@ -66,12 +72,12 @@ class FederatedLearningClient:
 				diff=self.get_delta()
 			)))
 
-	def do_training_step(self, params):
+	def do_training_step(self, params: Params):
 		logger.info("%s starting training", self.client_id)
-		data_loader = DataLoader(self.dataset, batch_size=params.batchsize, drop_last=True)
+		data_loader = xray_training.make_train_loader(self.training_params, self.dataset, batch_size=params.batch_size, drop_last=True)
 		for epoch in range(params.epochs):
 			logger.debug("%s epoch %d", self.client_id, epoch)
-			training.train(self.model, params, data_loader, epoch=epoch, batches=0)
+			training.train(self.model, params, data_loader, epoch=epoch)
 
 	def apply_delta(self, delta: WeightDiff):
 		Weights(self.model).add(delta)

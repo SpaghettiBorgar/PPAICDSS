@@ -29,11 +29,10 @@ def _configure_matplotlib_backend() -> None:
 
 # _configure_matplotlib_backend()
 print(f"Backend is now {matplotlib.get_backend()}")
-import matplotlib.pyplot as plt
 import torch
 
 import training
-import xray_training
+from training.xray import xray_training
 
 signal.signal(signal.SIGUSR1, lambda sig, frame: training.do_save())
 signal.signal(signal.SIGTERM, lambda sig, frame: training.do_save() or sys.exit(0))

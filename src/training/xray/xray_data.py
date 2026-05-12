@@ -1,6 +1,8 @@
+import multiprocessing as mp
 import os
 from collections import OrderedDict
 from multiprocessing import shared_memory, current_process
+from multiprocessing.managers import SharedMemoryManager, DictProxy, SyncManager
 from typing import Tuple
 
 import numpy as np
@@ -13,9 +15,15 @@ from torchvision.io import decode_image
 DATA_DIR = os.getenv("TRAIN_DATA_DIR", default="./data")
 IMG_ROOT = f"{DATA_DIR}/images"
 
-LABELS = ["Atelectasis","Cardiomegaly","Consolidation","Edema","Enlarged Cardiomediastinum","Fracture","Lung Lesion","Lung Opacity","No Finding","Pleural Effusion","Pleural Other","Pneumonia","Pneumothorax","Support Devices"]
-CLASS_WEIGHTS = OrderedDict({'Atelectasis': 36574, 'Cardiomegaly': 34348, 'Consolidation': 7353, 'Edema': 19519, 'Enlarged Cardiomediastinum': 5317, 'Fracture': 3604, 'Lung Lesion': 6418, 'Lung Opacity': 43730, 'No Finding': 89070, 'Pleural Effusion': 41462, 'Pleural Other': 1748, 'Pneumonia': 14726, 'Pneumothorax': 7547, 'Support Devices': 42806})
-TOTAL_SAMPLES = 221121
+LABELS = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Enlarged Cardiomediastinum",
+          "Fracture", "Lung Lesion", "Lung Opacity", "No Finding", "Pleural Effusion", "Pleural Other",
+          "Pneumonia", "Pneumothorax", "Support Devices"]
+CLASS_WEIGHTS = OrderedDict(
+	{'Atelectasis': 36574, 'Cardiomegaly': 34348, 'Consolidation': 7353, 'Edema': 19519,
+	 'Enlarged Cardiomediastinum': 5317, 'Fracture': 3604, 'Lung Lesion': 6418,
+	 'Lung Opacity': 43730, 'No Finding': 89070, 'Pleural Effusion': 41462, 'Pleural Other': 1748,
+	 'Pneumonia': 14726, 'Pneumothorax': 7547, 'Support Devices': 42806})
+TOTAL_SAMPLES = int(os.getenv("TRAIN_DATA_COUNT", default=221121))
 
 import data_prep
 
@@ -25,9 +33,28 @@ annotations = pd.read_csv(f"{DATA_DIR}/annotations.csv")
 chunk_cache_size = 4
 chunk_cache = OrderedDict()
 
+mp_man: SyncManager | None = None
+smm: SharedMemoryManager | None = None
+shared_index: DictProxy | None = None
+
+
+def setup_shm():
+	global mp_man, smm, shared_index
+	manager: SyncManager = mp.Manager()
+	smm = SharedMemoryManager()
+	smm.start()
+	shared_index = manager.dict()
+	shared_index['lock'] = manager.Lock()
+
+
+def shutdown_shm():
+	global mp_man, smm, shared_index
+	smm.shutdown()
+	mp_man.shutdown()
+
 
 class XrayDataset(Dataset):
-	def __init__(self, img_dir=IMG_ROOT, cache_index=None, shm_manager=None, offset=0, size=0, transform=None, use_chunks=True):
+	def __init__(self, img_dir=IMG_ROOT, cache_index=shared_index, shm_manager=smm, offset=0, size=0, transform=None, use_chunks=True):
 		self.img_dir = img_dir
 		self.transform = transform
 		self.size = size if size > 0 else (len(annotations.index) - offset + size if offset >= 0 else -offset)
@@ -35,7 +62,7 @@ class XrayDataset(Dataset):
 		self.use_chunks = use_chunks
 		assert (cache_index is None) == (shm_manager is None)
 		self.cache_index = cache_index
-		self.smm=shm_manager
+		self.smm = shm_manager
 		self.cur_chunk_idx = None
 
 	def __len__(self):

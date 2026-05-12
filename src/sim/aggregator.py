@@ -45,11 +45,12 @@ class Aggregator:
 	connections: dict[TransportSocket, ClientID | None]
 	listeners: set[asyncio.Task]
 	global_model_rev: ModelRev
-	current_round: Round
+	current_round: Round | None
 	weight_deltas: OrderedDict[ModelRev, WeightDiff]
 	current_round_deltas: dict[ClientID, WeightDiff]
 	aggregation_strategy: AggregationStrategy
 	loop_task: asyncio.Task
+	round_end_event: asyncio.Event
 
 	def __init__(self):
 		self.clients = {}
@@ -59,9 +60,14 @@ class Aggregator:
 		self.aggregation_strategy = FedAvg()
 		self.current_round = None
 		self.listeners = set()
+		self.round_end_event = asyncio.Event()
 
 	def start(self):
 		self.loop_task = asyncio.create_task(self.loop())
+
+	def shutdown(self):
+		logger.info("Aggregator shutting down")
+		self.loop_task.cancel()
 
 	async def loop(self):
 		logger.info("Aggregator running")
@@ -73,7 +79,7 @@ class Aggregator:
 			await asyncio.gather(*self.listeners, return_exceptions=True)
 			raise
 
-	async def _listen(self, sock):
+	async def _listen(self, sock: TransportSocket):
 		while True:
 			msg = await sock.recv()
 			logger.debug("Received from %s: %s", self.connections.get(sock), msg)
@@ -114,6 +120,8 @@ class Aggregator:
 		await self.check_round_end_condition()
 
 	async def check_round_end_condition(self):
+		if self.current_round is None:
+			return
 		end = False
 		num_deltas = len(self.current_round_deltas)
 		if num_deltas == len(self.clients):
@@ -132,14 +140,16 @@ class Aggregator:
 			self.global_model_rev = self.current_round.rev_b
 		except AggregationException as e:
 			msg = RoundEnd(round=self.current_round, success=False, delta=None)
-
-		for client_state in self.clients.values():
-			await client_state.socket.send(msg)
+		finally:
+			for client_state in self.clients.values():
+				await client_state.socket.send(msg)
+			self.round_end_event.set()
 
 	def build_delta(self, rev_a: ModelRev, rev_b: ModelRev):
 		return sum_((self.weight_deltas[d] for d in self.weight_deltas if rev_a < d <= rev_b))
 
 	async def start_new_round(self):
+		self.round_end_event.clear()
 		self.current_round = Round(
 			round_id=(self.current_round.round_id if self.current_round is not None else 0) + 1,
 			rev_a=self.global_model_rev,

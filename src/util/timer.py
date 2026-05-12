@@ -1,5 +1,6 @@
-from time import time
 import inspect
+from time import time
+
 
 class Timer:
 	def __init__(self, print=True):
@@ -20,4 +21,3 @@ class Timer:
 		if self.print:
 			frame = inspect.stack()[1]
 			print(f"[{inspect.getmodule(frame).__name__}:{frame.function}] Elapsed: {self.elapsed:.2f}s")
-
