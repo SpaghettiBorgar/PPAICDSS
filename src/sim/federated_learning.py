@@ -32,9 +32,9 @@ def create_participants(num_hospitals: int, seed: int = 0, devices=None) -> List
 	return hospitals
 
 
-def initialize_participants(hospitals: List[Hospital], aggregator: Aggregator, **kwargs):
+def initialize_participants(hospitals: List[Hospital], aggregator: Aggregator, phase='testing', **kwargs):
 	for hosp in hospitals:
-		params = XrayParams('testing', device=hosp.device, **kwargs)
+		params = XrayParams(phase, device=hosp.device, **kwargs)
 		client = hosp.fl_projects['cxr']
 		client.set_params(params)
 		client.dataset.transform = params.get_transform()
@@ -54,34 +54,68 @@ def establish_connection(client: FederatedLearningClient, aggregator: Aggregator
 	aggregator.connect(transport.create_socket())
 
 
-async def run_simulation():
+async def run_simulation(num_participants=3, phase='testing', rounds=3, checkpoint=None, **extra_params):
 	device_count = torch.cuda.device_count()
 	devices = [f"cuda:{i}" for i in range(device_count)]
 
 	xray_data.setup_shm()
 
-	hospitals = create_participants(3, devices=devices)
+	params = dict(checkpoint=checkpoint, phase=phase, save=False) | extra_params
+
+	hospitals = create_participants(num_participants, devices=devices)
 	aggregator = Aggregator()
 	aggregator.start()
 	logger.info("Aggregator started")
-	initialize_participants(hospitals, aggregator)
+	initialize_participants(hospitals, aggregator, **params)
 	logger.info("Clients initialized")
 	await setup_federation(hospitals)
 	logger.info("Federation set up")
 
-	await aggregator.start_new_round()
-	logger.info("Waiting for round end")
-	await aggregator.round_end_event.wait()
+	logs = dict(
+		time=[],
+		loss=[],
+		acc=[]
+	)
+
+	test_params = XrayParams(**(params | dict(resolution=600, batch_size=256, device="cuda")))
+	test_dataset = XrayDataset(offset=-20000, transform=test_params.get_transform())
+	test_loader = xray_training.make_test_loader(test_params, test_dataset)
+
 	sim.time.init_time()
+
+	for round in range(rounds):
+		logger.info("Starting round %d", round)
+
+		await aggregator.start_new_round()
+		logger.info("Waiting for round end")
+		await aggregator.round_end_event.wait()
+
+		models = [hosp.fl_projects['cxr'].model for hosp in hospitals]
+		logs['time'].append([hosp.fl_projects['cxr'].training_times for hosp in hospitals])
+		logs['loss'].append([hosp.fl_projects['cxr'].training_losses for hosp in hospitals])
+		logs['acc'].append(training.test(models[0], test_params, test_loader))
+
+		params = hospitals[0].fl_projects['cxr'].training_params
+
+	models = [hosp.fl_projects['cxr'].model for hosp in hospitals]
+	with torch.no_grad():
+		for (n, p) in iter(Weights(models[1]) - Weights(models[0])):
+			print(f"{n}: {(p.min().item(), p.max().item(), p.mean().item(), p.std().item())}")
+		print()
+		for (n, p) in iter(Weights(models[2]) - Weights(models[0])):
+			print(f"{n}: {(p.min().item(), p.max().item(), p.mean().item(), p.std().item())}")
+
+	training.save(models[0], params, logs, path_fmt="./checkpoints/xray_resnet/fl_%s")
+
 	logger.info("Rounds ended, shutting down")
 	aggregator.shutdown()
 	for hosp in hospitals:
 		hosp.fl_projects['cxr'].shutdown()
+
 	logger.info("Simulation done")
 
-	xray_data.shutdown_shm()
 
 if __name__ == '__main__':
 	logging.basicConfig(level=logging.DEBUG)
-	asyncio.run(run_simulation(), debug=True)
+	asyncio.run(run_simulation(3, 'testing', 2, None, epochs=2, batch_size=256, batches=256), debug=True)
 	logger.info("Terminating")

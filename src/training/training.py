@@ -1,12 +1,14 @@
 import json
 import time
 from datetime import datetime
+from typing import TypeAlias, Callable, Any
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data._utils.collate import default_collate
 
+import training.xray.xray_cnn
 from training.params import Params
 from util.mapping import tree_map
 
@@ -56,10 +58,13 @@ def train(model: torch.nn.Module, params: Params, train_loader: DataLoader, epoc
 	return losses
 
 
-def test(model: torch.nn.Module, params: Params, test_loader: DataLoader):
+TestCriterionType: TypeAlias = Callable[[torch.Tensor, torch.Tensor], Any]
+hamming_norm = lambda target, output: torch.norm(target - output, dim=1, p=1).mean().item()
+
+
+def test(model: torch.nn.Module, params: Params, test_loader: DataLoader, criterion: TestCriterionType = hamming_norm):
 	fix_collate(test_loader)
 	model.eval()
-	criterion = params.get_criterion()
 
 	accs = []
 	with torch.no_grad():
@@ -67,32 +72,32 @@ def test(model: torch.nn.Module, params: Params, test_loader: DataLoader):
 			inp, target = tree_map(lambda t: t.to(params.device), (inp, target))
 			output = model(inp)
 			output = F.sigmoid(output)
-			acc = torch.norm(target - output, dim=1, p=1).mean()
-			accs.append(acc.item())
+			acc = criterion(target, output)
+			accs.append(acc)
 			if batch_idx + 1 == params.batches:
 				break
 
 		return sum(accs) / len(accs)
 
 
-def save(model=None, params=None, logs=None, name_suffix=""):
+def save(model=None, params=None, logs=None, path_fmt=training.xray.xray_cnn.checkpoints_dir + '/%s'):
 	timestamp = datetime.today().strftime('%m_%d_%H%M%S')
-	name = timestamp + ('_' + name_suffix if len(name_suffix) > 0 else '')
-	print(f"Saving as {name}")
+	path = path_fmt % timestamp + ".pt"
+	print(f"Saving as {path}")
 
 	if params is not None:
-		with open(f"./logs/train_{name}.log", "w+") as f:
+		with open(f"./logs/train_{timestamp}.log", "w+") as f:
 			o = vars(params).copy()
 			if logs is not None:
 				o.update(
-					epoch_time=sum(logs['time']) / max(len(logs['time']), 1),
+					epoch_time=logs['time'],
 					loss_history=logs['loss'],
 					acc_history=logs['acc']
 				)
 			f.write(json.dumps(o, default=str, indent='\t'))
 
 	if model is not None:
-		torch.save(model.state_dict(), f"./checkpoints/xray_{name}.pt")
+		torch.save(model.state_dict(), path)
 
 
 do_save = lambda: None
