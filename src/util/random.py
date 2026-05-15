@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 import random
+from collections.abc import Iterable
 
 
 def random_partitions(

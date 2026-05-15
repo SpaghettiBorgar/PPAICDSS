@@ -43,6 +43,8 @@ def generate_chunk(dataset: Dataset, file: str | IO, idx_start: int, idx_end: in
 	print(f"[{mp.current_process().name}] generating chunk {idx_start} - {idx_end}")
 	if isinstance(file, str):
 		chunk_file = zstd.open(file, mode='wb', level=compression_level)
+	else:
+		chunk_file = file
 	torch.save(torch.stack([transform(dataset[i]) for i in range(idx_start, idx_end)]), f=chunk_file)
 	if isinstance(file, str):
 		chunk_file.close()

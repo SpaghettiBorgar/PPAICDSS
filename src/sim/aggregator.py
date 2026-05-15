@@ -5,8 +5,8 @@ from abc import ABC, abstractmethod
 from functools import reduce
 from typing import List, OrderedDict, override
 
-from sim import get_time
 from sim.messages import *
+from sim.time import get_time
 from sim.transport import TransportSocket
 
 logger = logging.getLogger(__name__)

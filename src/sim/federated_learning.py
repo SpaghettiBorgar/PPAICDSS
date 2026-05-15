@@ -4,15 +4,17 @@ from typing import List
 
 import torch
 
-from sim import *
+import sim.time
 from sim.aggregator import Aggregator
 from sim.fl_client import FederatedLearningClient
 from sim.hospital import Hospital
 from sim.transport import InProcessTransport
-from training.xray import xray_data
+from training import training
+from training.xray import xray_data, xray_training
 from training.xray.xray_data import XrayDataset
 from training.xray.xray_params import XrayParams
 from util.random import random_partitions
+from util.weights import Weights
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +69,10 @@ async def run_simulation():
 	await setup_federation(hospitals)
 	logger.info("Federation set up")
 
-	sim_start_time = time.time()
 	await aggregator.start_new_round()
 	logger.info("Waiting for round end")
 	await aggregator.round_end_event.wait()
+	sim.time.init_time()
 	logger.info("Rounds ended, shutting down")
 	aggregator.shutdown()
 	for hosp in hospitals:

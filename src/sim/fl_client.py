@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import sys
+import time
 import traceback
+from typing import List
 
 import torch.nn
 
@@ -23,10 +25,12 @@ class FederatedLearningClient:
 	global_weights: Weights
 	aggregator: TransportSocket
 	current_round: Round
-	training_params: Params
 	waiting_for_update: bool
 	training: bool
 	training_task: asyncio.Task
+	training_params: Params
+	training_losses: List[List[float]]
+	training_times: List[float]
 	loop_task: asyncio.Task
 
 	def __init__(self, client_id, dataset):
@@ -37,6 +41,8 @@ class FederatedLearningClient:
 		self.global_weights = None
 		self.waiting_for_update = False
 		self.training = False
+		self.training_losses = []
+		self.training_times = []
 
 	def start(self):
 		self.loop_task = asyncio.create_task(self.loop())
@@ -57,7 +63,7 @@ class FederatedLearningClient:
 
 	def start_training(self):
 		self.training = True
-		self.training_task = asyncio.create_task(asyncio.to_thread(self.do_training_step, self.training_params))
+		self.training_task = asyncio.create_task(asyncio.to_thread(self.do_training_step))
 		self.training_task.add_done_callback(lambda t: asyncio.create_task(self.on_training_complete(t)))
 
 	async def on_training_complete(self, task: asyncio.Task):
@@ -72,17 +78,22 @@ class FederatedLearningClient:
 				diff=self.get_delta()
 			)))
 
-	def do_training_step(self, params: Params):
+	def do_training_step(self):
+		params = self.training_params
 		logger.info("%s starting training", self.client_id)
-		data_loader = xray_training.make_train_loader(self.training_params, self.dataset, batch_size=params.batch_size, drop_last=True)
+		data_loader = xray_training.make_train_loader(params, self.dataset, batch_size=params.batch_size, drop_last=True)
 		for epoch in range(params.epochs):
 			logger.debug("%s epoch %d", self.client_id, epoch)
-			training.train(self.model, params, data_loader, epoch=epoch)
+			start_time = time.time()
+			self.training_losses.append(training.train(self.model, params, data_loader, epoch=epoch))
+			self.training_times.append(time.time() - start_time)
 
 	def apply_delta(self, delta: WeightDiff):
 		Weights(self.model).add(delta)
 
 	def get_delta(self) -> Weights:
+		if self.global_weights is None:
+			raise InvalidStateException()
 		return Weights(self.model) - self.global_weights
 
 	def set_weights(self, weights: Weights):
@@ -90,6 +101,7 @@ class FederatedLearningClient:
 
 	def set_model(self, model: torch.nn.Module):
 		self.model = model
+		self.global_weights = Weights(self.model) * 0
 
 	async def update_if_necessary(self):
 		if self.local_rev < self.global_rev:
@@ -130,6 +142,8 @@ class FederatedLearningClient:
 		self.apply_delta(msg.delta.diff)
 		self.global_rev = msg.delta.rev_b
 		self.local_rev = msg.delta.rev_b
+
+		logger.info("[%s] local_rev now %d", self.client_id, self.local_rev)
 		if self.waiting_for_update:
 			self.waiting_for_update = False
 			self.start_training()
