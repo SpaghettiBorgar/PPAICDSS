@@ -40,8 +40,8 @@ def make_test_loader(params: Params, dataset: Dataset, **kwargs):
 	return DataLoader(dataset=dataset, **(loader_args | test_loader_args))
 
 
-def train_xray_model(phase, checkpoint, device):
-	params = XrayParams(phase, checkpoint=checkpoint, device=device)
+def train_xray_model(phase, checkpoint, device, **extra_params):
+	params = XrayParams(phase, checkpoint=checkpoint, device=device, **extra_params)
 
 	model = params.get_model()
 	transform = params.get_transform()

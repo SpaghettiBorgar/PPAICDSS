@@ -9,7 +9,7 @@ import torchvision.models as models
 
 data_dir = os.getenv("TRAIN_DATA_DIR", default="./data")
 img_root = f"{data_dir}/images"
-checkpoints_dir = "./checkpoints"
+checkpoints_dir = "./checkpoints/xray_resnet"
 
 
 class XrayModel(nn.Module):

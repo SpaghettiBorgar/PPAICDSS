@@ -52,7 +52,7 @@ class Params:
 
 	def get_weights(self):
 		if self._weights is None:
-			self._weights = None if self.checkpoint is None else torch.load(f"{CHECKPOINTS_DIR}/{self.checkpoint}", weights_only=True)
+			self._weights = None if self.checkpoint is None else torch.load(self.checkpoint, weights_only=True, map_location=self.device)
 		return self._weights
 
 	def get_criterion(self):

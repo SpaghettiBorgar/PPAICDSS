@@ -19,7 +19,7 @@ from util.weights import Weights
 logger = logging.getLogger(__name__)
 
 
-def create_participants(num_hospitals: int, seed: int = 0, devices=None) -> List[Hospital]:
+def create_participants(num_hospitals: int, seed: int = None, devices=None) -> List[Hospital]:
 	hospitals = []
 	partitions = random_partitions(range(xray_data.TOTAL_SAMPLES), num_hospitals, seed=seed, evenness=0.8)
 	for i, p in enumerate(partitions):

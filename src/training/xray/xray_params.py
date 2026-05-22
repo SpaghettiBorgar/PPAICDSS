@@ -78,7 +78,7 @@ PHASES = {
 		freeze_backend=True,
 		save=False
 	),
-	1: dict(
+	'1': dict(
 		batch_size=512,
 		epochs=6,
 		resolution=384,
@@ -86,7 +86,7 @@ PHASES = {
 		weight_decay=1e-3,
 		freeze_backend=True,
 	),
-	2: dict(
+	'2': dict(
 		batch_size=160,
 		epochs=10,
 		resolution=384,
@@ -94,7 +94,7 @@ PHASES = {
 		weight_decay=1e-3,
 		freeze_backend=False,
 	),
-	3: dict(
+	'3': dict(
 		batch_size=64,
 		epochs=4,
 		resolution=600,

@@ -79,25 +79,36 @@ def test(model: torch.nn.Module, params: Params, test_loader: DataLoader, criter
 
 		return sum(accs) / len(accs)
 
-
-def save(model=None, params=None, logs=None, path_fmt=training.xray.xray_cnn.checkpoints_dir + '/%s'):
+save_model_path = "./checkpoints/xray_resnet/{phase}_{timestamp}.pt"
+save_logs_path = "./logs/xray_{phase}_{timestamp}.log"
+def save(model=None, params=None, logs=None, model_path=save_model_path, logs_path=save_logs_path):
 	timestamp = datetime.today().strftime('%m_%d_%H%M%S')
-	path = path_fmt % timestamp + ".pt"
-	print(f"Saving as {path}")
 
-	if params is not None:
-		with open(f"./logs/train_{timestamp}.log", "w+") as f:
-			o = vars(params).copy()
-			if logs is not None:
-				o.update(
-					epoch_time=logs['time'],
-					loss_history=logs['loss'],
-					acc_history=logs['acc']
-				)
-			f.write(json.dumps(o, default=str, indent='\t'))
+
+	if logs is not None:
+		try:
+			p = logs_path.format(phase=params.phase, timestamp=timestamp)
+			print(f"Saving logs to {p}")
+			with open(p, "w+") as f:
+				o = vars(params).copy()
+				if logs is not None:
+					o.update(
+						epoch_time=logs['time'],
+						loss_history=logs['loss'],
+						acc_history=logs['acc']
+					)
+				f.write(json.dumps(o, default=str, indent='\t'))
+		except Exception as e:
+			print(e)
+
 
 	if model is not None:
-		torch.save(model.state_dict(), path)
+		try:
+			p = model_path.format(phase=params.phase if params is not None else '', timestamp=timestamp)
+			print(f"Saving model to {p}")
+			torch.save(model.state_dict(), p)
+		except Exception as e:
+			print(e)
 
 
 do_save = lambda: None
@@ -111,7 +122,7 @@ def run(model: torch.nn.Module, params: Params, train_dataloader: DataLoader, te
 
 	logs = {'loss': loss_history, 'time': time_history, 'acc': acc_history}
 	global do_save
-	do_save = lambda: save(model=model, params=params, logs=logs, name_suffix=str(params.phase))
+	do_save = lambda: save(model=model, params=params, logs=logs)
 
 	for epoch in range(0, params.epochs):
 		print(f"Begin epoch {epoch}")
@@ -128,7 +139,7 @@ def run(model: torch.nn.Module, params: Params, train_dataloader: DataLoader, te
 		print(f"Acc:  {acc_history[-1]:.6f}")
 
 		if params.save and epoch % 1 == 0 and epoch != params.epochs - 1:
-			save(model, name_suffix=str(params.phase))
+			save(model=model, params=params)
 
 	if params.save:
 		do_save()

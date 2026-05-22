@@ -49,8 +49,11 @@ def setup_shm():
 
 def shutdown_shm():
 	global mp_man, smm, shared_index
-	smm.shutdown()
-	mp_man.shutdown()
+	try:
+		smm.shutdown()
+		mp_man.shutdown()
+	except AttributeError:
+		pass
 
 
 class XrayDataset(Dataset):
