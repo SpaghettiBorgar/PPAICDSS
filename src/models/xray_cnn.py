@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.utils.data
 import torchvision.models as models
 
+
 data_dir = os.getenv("TRAIN_DATA_DIR", default="./data")
 img_root = f"{data_dir}/images"
 checkpoints_dir = "./checkpoints"

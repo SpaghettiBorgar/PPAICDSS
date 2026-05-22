@@ -5,7 +5,7 @@ from torchvision.transforms import InterpolationMode, v2
 
 import training.xray.xray_data as xray_data
 from training.params import Params
-from training.xray.xray_cnn import XrayModel
+from models.xray_cnn import XrayModel
 
 PhaseType: TypeAlias = Union[str, int, None]
 

@@ -4,7 +4,7 @@ import data_prep
 import training.xray.xray_data as xray_data
 from training import training
 from training.params import Params
-from training.xray.xray_cnn import *
+from models.xray_cnn import *
 from training.xray.xray_params import XrayParams
 from util.sampler import BlockShuffleBatchSampler
 

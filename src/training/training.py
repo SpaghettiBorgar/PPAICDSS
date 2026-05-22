@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data._utils.collate import default_collate
 
-import training.xray.xray_cnn
+import models.xray_cnn
 from training.params import Params
 from util.mapping import tree_map
 
