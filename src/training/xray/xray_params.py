@@ -4,8 +4,8 @@ import torch
 from torchvision.transforms import InterpolationMode, v2
 
 import training.xray.xray_data as xray_data
+from models.xray_cnn import XrayModel, get_latest_checkpoint
 from training.params import Params
-from models.xray_cnn import XrayModel
 
 PhaseType: TypeAlias = Union[str, int, None]
 
@@ -33,6 +33,8 @@ class XrayParams(Params):
 		self.phase = phase
 		self._model = None
 		self._transform = None
+		if self.checkpoint == "latest":
+			self.checkpoint = get_latest_checkpoint()
 
 	def get_transform(self):
 		if self._transform is None:

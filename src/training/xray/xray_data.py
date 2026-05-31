@@ -18,6 +18,10 @@ IMG_ROOT = f"{DATA_DIR}/images"
 LABELS = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Enlarged Cardiomediastinum",
           "Fracture", "Lung Lesion", "Lung Opacity", "No Finding", "Pleural Effusion", "Pleural Other",
           "Pneumonia", "Pneumothorax", "Support Devices"]
+LABELS_SHORT = ["Atelect", "Cardiomeg", "Consolid", "Edema", "Enl.Cardm", "Fracture",
+                "Lung Lesn", "Lung Opac", "No Find", "Pleur.Eff", "Pleur.Oth", "Pneumonia", "PneumoTrx",
+                "Supp. Dev"]
+
 CLASS_WEIGHTS = OrderedDict(
 	{'Atelectasis': 36574, 'Cardiomegaly': 34348, 'Consolidation': 7353, 'Edema': 19519,
 	 'Enlarged Cardiomediastinum': 5317, 'Fracture': 3604, 'Lung Lesion': 6418,
@@ -57,6 +61,8 @@ def shutdown_shm():
 
 
 class XrayDataset(Dataset):
+	classes = LABELS
+
 	def __init__(self, img_dir=IMG_ROOT, cache_index=shared_index, shm_manager=smm, offset=0, size=0, transform=None, use_chunks=True):
 		self.img_dir = img_dir
 		self.transform = transform
@@ -72,7 +78,7 @@ class XrayDataset(Dataset):
 		return self.size
 
 	def __getitem__(self, index) -> Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-		index += self.offset
+		index = self.real_index(index)
 		sample = annotations.loc[index]
 
 		if self.use_chunks:
@@ -128,3 +134,6 @@ class XrayDataset(Dataset):
 		view = F.one_hot(torch.tensor([view]).long(), num_classes=len(_views) + 1).squeeze()
 
 		return (img, view), labels
+
+	def real_index(self, idx):
+		return idx + self.offset
