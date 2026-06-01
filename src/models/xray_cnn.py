@@ -21,12 +21,12 @@ def get_latest_checkpoint(checkpoints_dir=checkpoints_dir, filter: Callable[[str
 
 
 class XrayModel(nn.Module):
-	def __init__(self, num_classes=14, xray_view_dim=5, weights=None, backend=models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1), **_):
+	def __init__(self, num_classes=14, xray_view_dim=5, weights=None, backend= lambda: models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1), **_):
 		super().__init__()
 
 		self.xray_view_dim = xray_view_dim
 
-		self.backend = backend
+		self.backend = backend()
 		old_weights = self.backend.conv1.weight.data
 		self.backend.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
 		self.backend.conv1.weight.data = old_weights.mean(dim=1, keepdim=True)
