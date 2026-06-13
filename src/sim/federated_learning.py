@@ -88,7 +88,6 @@ async def run_simulation(num_participants=3, phase='testing', rounds=3, checkpoi
 		logger.info("Starting round %d", round)
 
 		await aggregator.start_new_round()
-		logger.info("Waiting for round end")
 		await aggregator.round_end_event.wait()
 
 		models = [hosp.fl_projects['cxr'].model for hosp in hospitals]
@@ -99,14 +98,9 @@ async def run_simulation(num_participants=3, phase='testing', rounds=3, checkpoi
 		params = hospitals[0].fl_projects['cxr'].training_params
 
 	models = [hosp.fl_projects['cxr'].model for hosp in hospitals]
-	with torch.no_grad():
-		for (n, p) in iter(Weights(models[1]) - Weights(models[0])):
-			print(f"{n}: {(p.min().item(), p.max().item(), p.mean().item(), p.std().item())}")
-		print()
-		for (n, p) in iter(Weights(models[2]) - Weights(models[0])):
-			print(f"{n}: {(p.min().item(), p.max().item(), p.mean().item(), p.std().item())}")
 
-	training.save(models[0], params, logs, path_fmt="./checkpoints/xray_resnet/fl_%s")
+	params.phase = 'fl'
+	training.save(models[0], params, logs)
 
 	logger.info("Rounds ended, shutting down")
 	aggregator.shutdown()
@@ -117,6 +111,7 @@ async def run_simulation(num_participants=3, phase='testing', rounds=3, checkpoi
 
 
 if __name__ == '__main__':
-	logging.basicConfig(level=logging.DEBUG)
-	asyncio.run(run_simulation(3, 'testing', 2, None, epochs=2, batch_size=256, batches=256), debug=True)
+	logging.basicConfig(level=logging.DEBUG, force=True)
+
+	asyncio.run(run_simulation(3, 'testing', 2, None, epochs=2, batch_size=256, batches=256), debug=False)
 	logger.info("Terminating")
