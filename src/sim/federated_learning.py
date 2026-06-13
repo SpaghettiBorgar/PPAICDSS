@@ -8,13 +8,13 @@ import sim.time
 from sim.aggregator import Aggregator
 from sim.fl_client import FederatedLearningClient
 from sim.hospital import Hospital
-from sim.transport import InProcessTransport
+from sim.transport import InProcessTransport, inprocess_address_space
 from training import training
 from training.xray import xray_data, xray_training
 from training.xray.xray_data import XrayDataset
 from training.xray.xray_params import XrayParams
-from util.random import random_partitions
 from util.weights import Weights
+from util.utils import random_partitions
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ def create_participants(num_hospitals: int, seed: int = None, devices=None) -> L
 			XrayDataset(offset=p.start, size=len(p)),
 		))
 		hospitals.append(hosp)
+		inprocess_address_space[hosp.name] = hosp.fl_projects['cxr']
 	return hospitals
 
 
@@ -50,7 +51,7 @@ def setup_federation(hospitals: List[Hospital]):
 
 def establish_connection(client: FederatedLearningClient, aggregator: Aggregator):
 	transport = InProcessTransport(latency=0.5)
-	client.connect(transport.create_socket())
+	client.connect(transport.create_socket(), 'aggregator')
 	aggregator.connect(transport.create_socket())
 
 
@@ -64,6 +65,7 @@ async def run_simulation(num_participants=3, phase='testing', rounds=3, checkpoi
 
 	hospitals = create_participants(num_participants, devices=devices)
 	aggregator = Aggregator()
+	inprocess_address_space['aggregator'] = aggregator
 	aggregator.start()
 	logger.info("Aggregator started")
 	initialize_participants(hospitals, aggregator, **params)

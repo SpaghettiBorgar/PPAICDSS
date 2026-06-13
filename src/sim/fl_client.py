@@ -7,17 +7,21 @@ from typing import List
 
 import torch.nn
 
+from sim import fl_params
 from sim.messages import *
-from sim.transport import TransportSocket
+from sim.transport import InProcessTransportSocket, TransportSocket
 from training import training
 from training.params import Params
 from training.xray import xray_training
+from util import smpc
+from util.utils import make_seed
 
-logger = logging.getLogger(__name__)
+MODEL_SHAPES = {}
 
 
 class FederatedLearningClient:
 	client_id: ClientID
+	logger: logging.Logger
 	dataset: torch.utils.data.Dataset
 	model: torch.nn.Module
 	local_rev: ModelRev
@@ -32,9 +36,18 @@ class FederatedLearningClient:
 	training_losses: List[List[float]]
 	training_times: List[float]
 	loop_task: asyncio.Task
+	join_event: asyncio.Event
+	rng: np.random.Generator
+	key: KeyShare
+	key_shares: dict[ClientID, KeyShare]
+	received_shares: dict[ClientID, KeyShare]
+	key_phase_group: List[ClientID]
+	peers: dict[ClientID, TransportSocket]
+	listeners: set[asyncio.Task]
 
 	def __init__(self, client_id, dataset):
 		self.client_id = client_id
+		self.logger = logging.getLogger(client_id)
 		self.dataset = dataset
 		self.model = None
 		self.local_rev = 0
@@ -43,20 +56,35 @@ class FederatedLearningClient:
 		self.training = False
 		self.training_losses = []
 		self.training_times = []
+		self.rng = np.random.default_rng(seed=make_seed(client_id))
+		self.key_shares = {}
+		self.received_shares = {}
+		self.peers = {}
+		self.listeners = set()
+		self.key_phase_group = []
+		self.join_event = asyncio.Event()
 
 	def start(self):
 		self.loop_task = asyncio.create_task(self.loop())
 
 	def shutdown(self):
-		logger.info("[%s] shutting down", self.client_id)
+		self.logger.info("Shutting down")
 		self.loop_task.cancel()
 
 	async def loop(self):
-		logger.info("Client %s running", self.client_id)
+		self.logger.info("Client %s running", self.client_id)
+		try:
+			await asyncio.Future()
+		except asyncio.CancelledError:
+			for task in self.listeners:
+				task.cancel()
+			await asyncio.gather(*self.listeners, return_exceptions=True)
+			raise
+
+	async def _listen(self, sock: TransportSocket):
 		while True:
-			msg = await self.aggregator.recv()
-			logger.debug("[%s] %s", self.client_id, msg)
-			await self.handle_message(msg)
+			msg = await sock.recv()
+			await self.handle_message(msg, sock)
 
 	def set_params(self, params):
 		self.training_params = params
@@ -72,18 +100,33 @@ class FederatedLearningClient:
 		if exc is not None:
 			traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
 		else:
-			await self.aggregator.send(DeltaPush(WeightsDelta(
-				rev_a=self.current_round.rev_a,
-				rev_b=self.current_round.rev_b,
-				diff=self.get_delta()
-			)))
+			if fl_params.use_smpc:
+				await self.push_encrypted_update()
+			else:
+				self.aggregator.send(EncryptedDeltaPush(EncryptedWeightsDelta(
+					rev_a=self.current_round.rev_a,
+					rev_b=self.current_round.rev_b,
+					diff=self.get_delta()
+				)))
+
+	async def push_encrypted_update(self):
+		self.key = smpc.generate_key_mask()
+		delta = self.get_delta()
+		vec, shapes = delta.flatten()
+		vec = smpc.quantize(smpc.normalize(vec))
+		crypt_vec = smpc.encrypt(vec, self.key)
+		self.aggregator.send(EncryptedDeltaPush(EncryptedWeightsDelta(
+			rev_a=self.current_round.rev_a,
+			rev_b=self.current_round.rev_b,
+			diff=crypt_vec
+		)))
 
 	def do_training_step(self):
 		params = self.training_params
-		logger.info("%s starting training", self.client_id)
+		self.logger.info("starting training")
 		data_loader = xray_training.make_train_loader(params, self.dataset, batch_size=params.batch_size, drop_last=True)
 		for epoch in range(params.epochs):
-			logger.debug("%s epoch %d", self.client_id, epoch)
+			self.logger.debug(" Training epoch %d", epoch)
 			start_time = time.time()
 			self.training_losses.append(training.train(self.model, params, data_loader, epoch=epoch))
 			self.training_times.append(time.time() - start_time)
@@ -101,16 +144,20 @@ class FederatedLearningClient:
 
 	def set_model(self, model: torch.nn.Module):
 		self.model = model
-		self.global_weights = Weights(self.model) * 0
+		weights = Weights(self.model)
+		MODEL_SHAPES[self.client_id] = weights.shapes()
+		self.global_weights = weights * 0
 
 	async def update_if_necessary(self):
 		if self.local_rev < self.global_rev:
-			await self.aggregator.send(UpdateRequest(rev_a=self.local_rev, rev_b=0))
+			self.aggregator.send(UpdateRequest(rev_a=self.local_rev, rev_b=0))
 			return True
 		else:
 			return False
 
-	async def handle_message(self, msg: Message):
+	async def handle_message(self, msg: Message, src: TransportSocket = None):
+		src_id = next((peer_id for peer_id, s in self.peers.items() if s is src), 'aggregator' if src is self.aggregator else 'unknown')
+		self.logger.debug(f"Received from %s: %s", src_id, msg)
 		match msg:
 			case FederationResponse():
 				await self.handle_federation_response(msg)
@@ -118,16 +165,57 @@ class FederatedLearningClient:
 				await self.handle_delta_push(msg)
 			case RoundAnnounce():
 				await self.handle_round_announce(msg)
+			case KeyPhaseAnnounce():
+				await self.handle_key_phase_announce(msg)
 			case RoundEnd():
 				self.handle_round_end(msg)
+			case SMPCKeyShare():
+				await self.handle_smpc_key_share(msg, next((peer_id for peer_id, sock in self.peers.items() if sock is src)))
+			case Ping():
+				if not msg.is_reply:
+					src.send(Ping(is_reply=True))
+			case _:
+				raise InvalidStateException(f"Unexpected message type {type(msg)}")
 
 	async def handle_round_announce(self, msg: RoundAnnounce):
 		self.current_round = msg.round
 		self.global_rev = msg.round.rev_a
+		self.key_shares = {}
+		self.received_shares = {}
+		self.key_phase_group = []
 		if await self.update_if_necessary():
 			self.waiting_for_update = True
 		else:
 			self.start_training()
+
+	async def do_peer_exchange(self):
+		for peer_id, sock in self.peers.items():
+			if not peer_id in self.key_shares:
+				self.key_shares[peer_id] = smpc.generate_key_mask()
+			self.logger.info(f"Sending key share to {peer_id}")
+			sock.send(SMPCKeyShare(key_share=self.key_shares[peer_id]))
+		if len(self.received_shares) == len(self.key_phase_group) != 0:
+			await self.submit_share_sum()
+
+	async def handle_smpc_key_share(self, msg: SMPCKeyShare, peer_id):
+		self.received_shares[peer_id] = msg.key_share
+		self.logger.debug(f"{len(self.received_shares)}/{len(self.key_phase_group)} key shares received")
+		if len(self.received_shares) == len(self.key_phase_group) != 0:
+			await self.submit_share_sum()
+
+	async def submit_share_sum(self):
+		self.logger.info("Submitting key share sum to aggregator")
+		server_share = smpc.make_last_share(self.key, list(self.received_shares.values()))
+		server_share += sum(self.key_shares.values()) % smpc.MOD
+		self.aggregator.send(SMPCKeyShare(key_share=server_share))
+
+	async def handle_key_phase_announce(self, msg: KeyPhaseAnnounce):
+		self.key_phase_group = msg.group
+		self.received_shares[self.client_id] = self.key_shares[self.client_id] = smpc.generate_key_mask()
+		for client_id in msg.group:
+			if client_id != self.client_id and client_id not in self.peers:
+				self.connect(InProcessTransportSocket.connect_to(dest=client_id, source=self.client_id), client_id)
+		await self.do_peer_exchange()
 
 	def handle_round_end(self, msg: RoundEnd):
 		pass
@@ -135,6 +223,7 @@ class FederatedLearningClient:
 	async def handle_federation_response(self, msg: FederationResponse):
 		self.global_rev = msg.global_model_rev
 		await self.update_if_necessary()
+		self.join_event.set()
 
 	async def handle_delta_push(self, msg: DeltaPush):
 		if self.local_rev != msg.delta.rev_a or msg.delta.rev_b < self.global_rev:
@@ -143,14 +232,21 @@ class FederatedLearningClient:
 		self.global_rev = msg.delta.rev_b
 		self.local_rev = msg.delta.rev_b
 
-		logger.info("[%s] local_rev now %d", self.client_id, self.local_rev)
+		self.logger.debug("local_rev now %d", self.local_rev)
 		if self.waiting_for_update:
 			self.waiting_for_update = False
 			self.start_training()
 
-	def connect(self, sock: TransportSocket):
-		self.aggregator = sock
+	def connect(self, sock: TransportSocket, id):
+		if id == 'aggregator':
+			self.aggregator = sock
+		else:
+			self.peers[id] = sock
+		task = asyncio.create_task(self._listen(sock))
+		self.listeners.add(task)
+		task.add_done_callback(self.listeners.discard)
 
 	async def join_federation(self):
-		logger.info("[%s] joining federation", self.client_id)
-		await self.aggregator.send(FederationRequest(client_id=self.client_id, local_model_rev=self.local_rev))
+		self.logger.info("joining federation")
+		self.aggregator.send(FederationRequest(client_id=self.client_id, local_model_rev=self.local_rev))
+		await self.join_event.wait()

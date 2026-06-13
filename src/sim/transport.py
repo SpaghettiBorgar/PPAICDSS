@@ -14,12 +14,15 @@ class TransportSocket(ABC):
 		self.callbacks = []
 
 	@abstractmethod
-	async def send(self, msg: Message):
+	def send(self, msg: Message):
 		pass
 
 	@abstractmethod
-	async def recv(self):
+	async def recv(self) -> Message:
 		pass
+
+
+inprocess_address_space = {}
 
 
 class InProcessTransportSocket(TransportSocket):
@@ -31,29 +34,50 @@ class InProcessTransportSocket(TransportSocket):
 		self.transport = transport
 		self.queue = asyncio.Queue()
 
-	async def put(self, msg: Message):
-		await self.queue.put(msg)
+	@classmethod
+	def connect_to(cls, dest, source):
+		if dest not in inprocess_address_space:
+			raise ConnectionError(f"Address {dest} not found in in-process address space")
+		peer = inprocess_address_space[dest]
+		transport = InProcessTransport()
+		sock1 = transport.create_socket()
+		sock2 = transport.create_socket()
+		peer.connect(sock2, source)
+		return sock1
+
+	def put(self, msg: Message):
+		self.queue.put_nowait(msg)
 
 	@override
-	async def send(self, msg: Message):
-		await self.transport.put(msg, self)
+	def send(self, msg: Message):
+		self.transport.put(msg, self)
 
 	@override
-	async def recv(self):
+	async def recv(self) -> Message:
 		return await self.queue.get()
 
 
 class InProcessTransport:
 	endpoints: List[InProcessTransportSocket]
 	latency: float
+	_dispatch_tasks: set[asyncio.Task]
 
 	def __init__(self, latency=0.):
 		self.endpoints = []
 		self.latency = latency
+		self._dispatch_tasks = set()
 
-	async def put(self, msg: Message, source: InProcessTransportSocket):
-		await asyncio.sleep(self.latency)
-		await asyncio.gather(*[sock.put(msg) for sock in self.endpoints if sock is not source])
+	def put(self, msg: Message, source: InProcessTransportSocket):
+		task = asyncio.create_task(self._deliver(msg, source))
+		self._dispatch_tasks.add(task)
+		task.add_done_callback(self._dispatch_tasks.discard)
+
+	async def _deliver(self, msg: Message, source: InProcessTransportSocket):
+		if self.latency:
+			await asyncio.sleep(self.latency)
+		for sock in self.endpoints:
+			if sock is not source:
+				sock.put(msg)
 
 	def create_socket(self):
 		sock = InProcessTransportSocket(self)
