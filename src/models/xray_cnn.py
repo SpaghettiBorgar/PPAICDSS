@@ -6,8 +6,6 @@ import torch.nn as nn
 import torch.utils.data
 import torchvision.models as models
 
-from training.xray.xray_data import LABELS
-
 data_dir = os.getenv("TRAIN_DATA_DIR", default="./data")
 img_root = f"{data_dir}/images"
 checkpoints_dir = "./checkpoints/xray_resnet"
@@ -21,7 +19,7 @@ def get_latest_checkpoint(checkpoints_dir=checkpoints_dir, filter: Callable[[str
 
 
 class XrayModel(nn.Module):
-	def __init__(self, num_classes=14, xray_view_dim=5, weights=None, backend= lambda: models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1), **_):
+	def __init__(self, num_classes=14, xray_view_dim=5, weights=None, backend=lambda: models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1), **_):
 		super().__init__()
 
 		self.xray_view_dim = xray_view_dim

@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-
 def vis_batch(t, nrow: int = None, ax=None):
 	from torchvision.utils import make_grid
 	if nrow is None:
@@ -139,6 +138,7 @@ def parse_args():
 	parser.add_argument("--key", default="loss", help="Series to plot (loss, acc, time)")
 	return parser.parse_args()
 
+
 def main():
 	print(f"DISPLAY: {os.getenv("DISPLAY", default="unset")}")
 	print(f"MPL Backend: {matplotlib.get_backend()}")
@@ -175,6 +175,7 @@ def main():
 		fig.savefig(args.output, bbox_inches="tight")
 	else:
 		plt.show()
+
 
 if __name__ == '__main__':
 	main()

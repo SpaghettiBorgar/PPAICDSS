@@ -13,7 +13,6 @@ from training import training
 from training.xray import xray_data, xray_training
 from training.xray.xray_data import XrayDataset
 from training.xray.xray_params import XrayParams
-from util.weights import Weights
 from util.utils import random_partitions
 
 logger = logging.getLogger(__name__)

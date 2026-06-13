@@ -8,7 +8,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data._utils.collate import default_collate
 
-import models.xray_cnn
 from training.params import Params
 from util.mapping import tree_map
 
@@ -50,7 +49,7 @@ def train(model: torch.nn.Module, params: Params, train_loader: DataLoader, epoc
 		if batch_idx % (1 if params.phase == 'testing' else 4) == 0:
 			n_total = len(train_loader.dataset) if params.batches == 0 else min(len(train_loader.dataset), params.batches * params.batch_size)
 			n_processed = min((batch_idx + 1) * params.batch_size, n_total)
-			print('Train Epoch {}: [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+			print('Train Epoch {}: [{}/{} ({:.0f}%)] \tLoss: {:.6f}'.format(
 				epoch, n_processed, n_total, 100. * n_processed // n_total, loss.item()))
 		if batch_idx + 1 == params.batches:
 			break
@@ -79,11 +78,13 @@ def test(model: torch.nn.Module, params: Params, test_loader: DataLoader, criter
 
 		return sum(accs) / len(accs)
 
+
 save_model_path = "./checkpoints/xray_resnet/{phase}_{timestamp}.pt"
 save_logs_path = "./logs/xray_{phase}_{timestamp}.log"
+
+
 def save(model=None, params=None, logs=None, model_path=save_model_path, logs_path=save_logs_path):
 	timestamp = datetime.today().strftime('%m_%d_%H%M%S')
-
 
 	if logs is not None:
 		try:
@@ -100,7 +101,6 @@ def save(model=None, params=None, logs=None, model_path=save_model_path, logs_pa
 				f.write(json.dumps(o, default=str, indent='\t'))
 		except Exception as e:
 			print(e)
-
 
 	if model is not None:
 		try:

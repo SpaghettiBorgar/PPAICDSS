@@ -1,9 +1,9 @@
 print("Initializing")
-import torch
-
 import argparse
 import signal
 import sys
+
+import torch
 
 from training import training
 from training.xray import xray_training

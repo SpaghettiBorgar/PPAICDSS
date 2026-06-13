@@ -2,9 +2,9 @@ from torch.utils.data import DataLoader, Dataset
 
 import data_prep
 import training.xray.xray_data as xray_data
+from models.xray_cnn import *
 from training import training
 from training.params import Params
-from models.xray_cnn import *
 from training.xray.xray_params import XrayParams
 from util.sampler import BlockShuffleBatchSampler
 
