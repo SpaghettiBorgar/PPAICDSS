@@ -3,13 +3,11 @@ from typing import TypeAlias, Union, override
 import torch
 from torchvision.transforms import InterpolationMode, v2
 
-import training.xray.xray_data as xray_data
 from models.xray_cnn import XrayModel, get_latest_checkpoint
 from training.params import Params
+from training.xray.xray_data import CLASS_POS_WEIGHTS
 
 PhaseType: TypeAlias = Union[str, int, None]
-
-CLASS_WEIGHTS = xray_data.TOTAL_SAMPLES / torch.tensor(list(xray_data.CLASS_WEIGHTS.values())) - 1
 
 XRAY_DEFAULT_PARAMS = dict(
 	batches=0,
@@ -59,7 +57,7 @@ class XrayParams(Params):
 	@override
 	def get_criterion(self):
 		if self._criterion is None:
-			self._criterion = self.criterion(**dict(pos_weight=CLASS_WEIGHTS.to(self.device)))
+			self._criterion = self.criterion(**dict(pos_weight=CLASS_POS_WEIGHTS.to(self.device)))
 		return self._criterion
 
 	@override

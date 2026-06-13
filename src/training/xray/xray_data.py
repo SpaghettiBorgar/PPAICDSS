@@ -27,7 +27,11 @@ CLASS_WEIGHTS = OrderedDict(
 	 'Enlarged Cardiomediastinum': 5317, 'Fracture': 3604, 'Lung Lesion': 6418,
 	 'Lung Opacity': 43730, 'No Finding': 89070, 'Pleural Effusion': 41462, 'Pleural Other': 1748,
 	 'Pneumonia': 14726, 'Pneumothorax': 7547, 'Support Devices': 42806})
+DATASET_TOTAL_SAMPLES = 221121
+CLASS_POS_WEIGHTS = DATASET_TOTAL_SAMPLES / torch.tensor(list(CLASS_WEIGHTS.values())) - 1
 TOTAL_SAMPLES = int(os.getenv("TRAIN_DATA_COUNT", default=221121))
+TEST_OFFSET = - min(20000, TOTAL_SAMPLES // 10)
+TRAIN_SIZE = TOTAL_SAMPLES + TEST_OFFSET
 
 import data_prep
 
@@ -66,8 +70,8 @@ class XrayDataset(Dataset):
 	def __init__(self, img_dir=IMG_ROOT, cache_index=shared_index, shm_manager=smm, offset=0, size=0, transform=None, use_chunks=True):
 		self.img_dir = img_dir
 		self.transform = transform
-		self.size = size if size > 0 else (len(annotations.index) - offset + size if offset >= 0 else -offset)
-		self.offset = offset if offset >= 0 else len(annotations.index) + offset
+		self.size = size if size > 0 else (TOTAL_SAMPLES - offset + size if offset >= 0 else -offset)
+		self.offset = offset if offset >= 0 else TOTAL_SAMPLES + offset
 		self.use_chunks = use_chunks
 		assert (cache_index is None) == (shm_manager is None)
 		self.cache_index = cache_index
@@ -79,7 +83,11 @@ class XrayDataset(Dataset):
 
 	def __getitem__(self, index) -> Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
 		index = self.real_index(index)
-		sample = annotations.loc[index]
+		try:
+			sample = annotations.loc[index]
+		except KeyError:
+			print(f"Index {index} not found in annotations of size {len(annotations.index)}")
+			raise
 
 		if self.use_chunks:
 			chunk_idx = index // data_prep.chunk_size

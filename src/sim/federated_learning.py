@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def create_participants(num_hospitals: int, seed: int = None, devices=None) -> List[Hospital]:
 	hospitals = []
-	partitions = random_partitions(range(xray_data.TOTAL_SAMPLES), num_hospitals, seed=seed, evenness=0.8)
+	partitions = random_partitions(range(xray_data.TRAIN_SIZE), num_hospitals, seed=seed, evenness=0.8)
 	for i, p in enumerate(partitions):
 		hosp = Hospital(f"Hospital {i}", device=devices[i % len(devices)] if devices is not None else "cuda")
 		hosp.add_project('cxr', FederatedLearningClient(
@@ -79,7 +79,7 @@ async def run_simulation(num_participants=3, phase='testing', rounds=3, checkpoi
 	)
 
 	test_params = XrayParams(**(params | dict(resolution=600, batch_size=256, device="cuda")))
-	test_dataset = XrayDataset(offset=-20000, transform=test_params.get_transform())
+	test_dataset = XrayDataset(offset=xray_data.TEST_OFFSET, transform=test_params.get_transform())
 	test_loader = xray_training.make_test_loader(test_params, test_dataset)
 
 	sim.time.init_time()

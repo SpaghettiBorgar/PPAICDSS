@@ -48,8 +48,8 @@ def train_xray_model(phase, checkpoint, device, **extra_params):
 
 	xray_data.setup_shm()
 
-	training_data = xray_data.XrayDataset(img_root, offset=0, size=200000, transform=transform)
-	testing_data = xray_data.XrayDataset(img_root, offset=-4000, size=0, transform=transform)
+	training_data = xray_data.XrayDataset(img_root, offset=0, size=xray_data.TRAIN_SIZE, transform=transform)
+	testing_data = xray_data.XrayDataset(img_root, offset=xray_data.TEST_OFFSET, size=0, transform=transform)
 
 	params.sampler = BlockShuffleBatchSampler(
 		len(training_data), data_prep.chunk_size, block_size=data_prep.chunk_size // 4, batch_size=params.batch_size)
