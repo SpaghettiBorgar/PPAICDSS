@@ -17,6 +17,7 @@ from torch.nn.functional import one_hot
 from torchvision.models.resnet import BasicBlock, Bottleneck
 from torchvision.utils import make_grid
 
+from models.simplenets import SimpleNet, LeNet
 from util.lazy import Lazy
 from util.mapping import tree_map
 
@@ -30,47 +31,6 @@ from torchvision.transforms import v2, InterpolationMode
 
 from models.xray_cnn import XrayModel
 from training.xray.xray_data import XrayDataset, DATA_DIR
-
-
-class SimpleNet(nn.Module):
-	def __init__(self, resolution=32, num_classes=14):
-		super().__init__()
-		self.net = nn.Sequential(
-			nn.Conv2d(1, 8, 5),
-			nn.BatchNorm2d(8),
-			nn.ReLU(),
-			nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-			nn.Flatten(),
-			nn.Linear((resolution - 4) ** 2 * 2, 256),
-			nn.ReLU(),
-			nn.Linear(256, 128),
-			nn.ReLU(),
-			nn.Linear(128, num_classes)
-		)
-
-	def forward(self, x):
-		# x = x.view(x.size(0), -1)
-		return self.net(x)
-
-
-class LeNet(nn.Module):
-	def __init__(self, resolution=32, num_classes=100):
-		super().__init__()
-		act = nn.Sigmoid
-		self.body = nn.Sequential(
-			nn.Conv2d(3, 12, kernel_size=5, padding=5 // 2, stride=2),
-			act(),
-			nn.Conv2d(12, 12, kernel_size=5, padding=5 // 2, stride=2),
-			act(),
-			nn.Conv2d(12, 12, kernel_size=5, padding=5 // 2, stride=1),
-			act(),
-		)
-		self.fc = nn.Sequential(nn.Linear((resolution // 4) ** 2 * 12, num_classes))
-
-	def forward(self, x):
-		out = self.body(x)
-		out = out.view(out.size(0), -1)
-		return self.fc(out)
 
 
 def resnet_wrapper(block, layers, num_classes=None, weights=None, **_):
