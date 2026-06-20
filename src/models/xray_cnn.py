@@ -5,6 +5,9 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 import torchvision.models as models
+from opacus.validators import ModuleValidator
+
+from util.dp_compat import make_model_dp_compatible, convert_dp_state_dict
 
 data_dir = os.getenv("TRAIN_DATA_DIR", default="./data")
 img_root = f"{data_dir}/images"
@@ -52,8 +55,19 @@ class XrayModel(nn.Module):
 			nn.Linear(256, num_classes)
 		)
 
+		# Make compatible with opacus DP
+		self.backend = ModuleValidator.fix(self.backend)
+		self.classifier = ModuleValidator.fix(self.classifier)
+		self.make_private_compatible()
+
 		if weights is not None:
-			self.load_state_dict(weights)
+			try:
+				self.load_state_dict(weights)
+			except RuntimeError:
+				self.load_state_dict(convert_dp_state_dict(weights))
+
+	def make_private_compatible(self):
+		make_model_dp_compatible(self)
 
 	def forward(self, x: Tuple[torch.Tensor, torch.Tensor] | torch.Tensor):
 		if isinstance(x, tuple):

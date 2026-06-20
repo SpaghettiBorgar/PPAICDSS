@@ -12,11 +12,18 @@ from sim.transport import InProcessTransport, inprocess_address_space
 from training import training
 from training.xray import xray_data, xray_training
 from training.xray.xray_data import XrayDataset
-from training.xray.xray_params import XrayParams
-from util.utils import random_partitions
+from training.xray.xray_params import XrayParams, PHASES as XRAY_PHASES
+from util.utils import random_partitions, auto_type
+import warnings
+import re
+warnings.filterwarnings("ignore", category=UserWarning, message=r"Full backward hook is firing .*")
+warnings.filterwarnings("ignore", category=UserWarning, message=r"Secure RNG turned off.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=r"Optimal order is the.*")
 
 logger = logging.getLogger(__name__)
 
+logging.getLogger("opacus.validators.batch_norm").setLevel("WARNING")
+logging.getLogger("opacus.validators.module_validator").setLevel("WARNING")
 
 def create_participants(num_hospitals: int, seed: int = None, devices=None) -> List[Hospital]:
 	hospitals = []

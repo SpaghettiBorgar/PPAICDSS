@@ -15,6 +15,7 @@ from training.params import Params
 from training.xray import xray_training
 from util import smpc
 from util.utils import make_seed
+from util.dp_compat import make_private_auto
 
 MODEL_SHAPES = {}
 
@@ -86,7 +87,16 @@ class FederatedLearningClient:
 			msg = await sock.recv()
 			await self.handle_message(msg, sock)
 
-	def set_params(self, params):
+	def set_params(self, params, init=True):
+		if init:
+			model = params.get_model()
+			data_loader = xray_training.make_train_loader(params, self.dataset, batch_size=params.batch_size, drop_last=False)
+			optimizer = params.get_optimizer()
+			params._model, params._optimizer, self.data_loader = make_private_auto(model, optimizer, data_loader, params)
+			self.set_model(params._model)
+		else:
+			self.model = params._model
+		params.log_prefix = f"[{self.client_id}] "
 		self.training_params = params
 
 	def start_training(self):

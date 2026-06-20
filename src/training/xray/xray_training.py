@@ -7,7 +7,7 @@ from training import training
 from training.params import Params
 from training.xray.xray_params import XrayParams
 from util.sampler import BlockShuffleBatchSampler
-
+from util.dp_compat import make_private_auto
 
 def register_faulthandler(*args):
 	__import__('faulthandler').enable()
@@ -43,7 +43,6 @@ def make_test_loader(params: Params, dataset: Dataset, **kwargs):
 def train_xray_model(phase, checkpoint, device, **extra_params):
 	params = XrayParams(phase, checkpoint=checkpoint, device=device, **extra_params)
 
-	model = params.get_model()
 	transform = params.get_transform()
 
 	xray_data.setup_shm()
@@ -55,13 +54,17 @@ def train_xray_model(phase, checkpoint, device, **extra_params):
 		len(training_data), data_prep.chunk_size, block_size=data_prep.chunk_size // 4, batch_size=params.batch_size)
 
 	loader_args = dict(
-		num_workers=min(os.cpu_count() or 0, 8)
+		num_workers=min(os.cpu_count() or 0, 6)
 	)
 
 	train_dataloader = make_train_loader(params, training_data, **loader_args)
 	test_dataloader = make_test_loader(params, testing_data, **loader_args)
 
+	params.get_model()
+	params.get_optimizer()
+	params._model, params._optimizer, train_dataloader = make_private_auto(params._model, params._optimizer, train_dataloader, params)
+
 	try:
-		training.run(model, params, train_dataloader, test_dataloader)
+		training.run(params._model, params, train_dataloader, test_dataloader)
 	finally:
 		xray_data.shutdown_shm()

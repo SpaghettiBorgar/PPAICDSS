@@ -3,9 +3,17 @@ from __future__ import annotations
 import hashlib
 import random
 from collections.abc import Iterable
-from typing import Any, Union, Sequence
+from typing import Any, Iterator, Union, Sequence
 
 import numpy as np
+
+
+def auto_type(val):
+	from ast import literal_eval
+	try:
+		return literal_eval(val)
+	except:
+		return val
 
 
 def make_seed(seed_input: Any) -> Union[int, Sequence[int]]:
@@ -171,3 +179,13 @@ def chunk_with_min_remainder(seq, n, n_min=1):
 		raise ValueError("Cannot satisfy n_min without making a chunk smaller than n_min.")
 
 	return chunks
+
+def resilient_iter(it: Iterator):
+	while True:
+		try:
+			yield next(it)
+		except StopIteration:
+			return
+		except Exception as e:
+			print(f"Skipping item due to error: {e}")
+			continue

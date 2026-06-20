@@ -31,6 +31,7 @@ class XrayParams(Params):
 		self.phase = phase
 		self._model = None
 		self._transform = None
+		super().__init__(**(XRAY_DEFAULT_PARAMS | (PHASES[phase] if phase is not None else dict()) | kwargs))
 		if self.checkpoint == "latest":
 			self.checkpoint = get_latest_checkpoint()
 

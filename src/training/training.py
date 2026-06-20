@@ -34,10 +34,14 @@ def train(model: torch.nn.Module, params: Params, train_loader: DataLoader, epoc
 	model.train()
 	losses = []
 
+	# if params.grad_norm is not None and params.noise_mult is not None:
+	make_model_dp_compatible(model)
+
 	optimizer = params.get_optimizer()
 	criterion = params.get_criterion()
 
-	for batch_idx, (inp, target) in enumerate(train_loader):
+
+	for batch_idx, (inp, target) in resilient_iter(enumerate(train_loader)):
 		inp, target = tree_map(lambda t: t.to(params.device), (inp, target))
 		optimizer.zero_grad()
 		output = model(inp)
@@ -46,11 +50,20 @@ def train(model: torch.nn.Module, params: Params, train_loader: DataLoader, epoc
 		loss.backward()
 		optimizer.step()
 		losses.append(loss.item())
-		if batch_idx % (1 if params.phase == 'testing' else 4) == 0:
+		if batch_idx % (1 if params.phase == 'testing' else 10) == 0:
 			n_total = len(train_loader.dataset) if params.batches == 0 else min(len(train_loader.dataset), params.batches * params.batch_size)
 			n_processed = min((batch_idx + 1) * params.batch_size, n_total)
-			print('Train Epoch {}: [{}/{} ({:.0f}%)] \tLoss: {:.6f}'.format(
-				epoch, n_processed, n_total, 100. * n_processed // n_total, loss.item()))
+			epsilon_str = ""
+			if params.target_delta is not None:
+				try:
+					for delta in [params.target_delta]:
+						epsilon_str = f"\tEpsilon (delta={delta}): {params.privacy_engine.get_epsilon(delta=delta)}"
+				except Exception as e:
+					print(f"Error occurred while calculating epsilon for delta={delta}: {e}")
+					pass
+			print('{}Train Epoch {}: [{}/{} ({:.0f}%)] \tLoss: {:.6f}'.format(params.log_prefix,
+				epoch, n_processed, n_total, 100. * n_processed // n_total, loss.item()) + epsilon_str)
+
 		if batch_idx + 1 == params.batches:
 			break
 

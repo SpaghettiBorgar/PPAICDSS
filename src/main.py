@@ -7,6 +7,7 @@ import torch
 
 from training import training
 from training.xray import xray_training
+from util.utils import auto_type
 
 
 def setup_signals():
@@ -21,8 +22,8 @@ def parse_args():
 	parser.add_argument("--phase", "-p", type=str, default='testing', help="Training phase parameter preset")
 	parser.add_argument("--save-path", "-o", type=str, default=training.save_model_path, help="Path template for checkpoint output")
 	parser.add_argument("--logs-path", type=str, default=training.save_logs_path, help="Path template for logs output")
-	parser.add_argument("-P", action='append', default=[], help="Override training parameters")
-	parser.add_argument("--seed", type=int, default=None, help="Global random seed")
+	parser.add_argument("-P", action='append', default=["target_epsilon=10.0", "target_delta=1e-6", "grad_norm=1.0"], help="Override training parameters")
+	parser.add_argument("--seed", type=int, default=0, help="Global random seed")
 	return parser.parse_args()
 
 
@@ -31,14 +32,12 @@ def main():
 	training.save_model_path = args.save_path
 	training.save_logs_path = args.logs_path
 
-	def auto_type(val):
-		from ast import literal_eval
-		try:
-			return literal_eval(val)
-		except:
-			return val
 
 	params = {k: auto_type(v) for (k, v) in [p.partition('=')[::2] for p in args.P]}
+
+	assert (('target_epsilon' in params) == ('target_delta' in params) == ('grad_norm' in params)
+		) or (('grad_norm' in params) == ('noise_mult' in params))
+
 
 	if args.seed is not None:
 		import random
