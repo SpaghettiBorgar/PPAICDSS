@@ -27,7 +27,6 @@ class XrayParams(Params):
 	_model: torch.nn.Module | None
 
 	def __init__(self, phase: PhaseType = None, **kwargs):
-		super().__init__(**(XRAY_DEFAULT_PARAMS | (PHASES[phase] if phase is not None else dict()) | kwargs))
 		self.phase = phase
 		self._model = None
 		self._transform = None
@@ -97,7 +96,7 @@ PHASES = {
 	),
 	'3': dict(
 		batch_size=64,
-		epochs=4,
+		epochs=14,
 		resolution=600,
 		lr=1e-4,
 		weight_decay=1e-4,

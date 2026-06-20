@@ -8,12 +8,14 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data._utils.collate import default_collate
 
+from util.dp_compat import make_model_dp_compatible
 from training.params import Params
 from util.mapping import tree_map
+from util.utils import resilient_iter
 
 
 def tuple_preserving_collate(batch):
-	return _lists_to_tuples(default_collate(batch))
+	return _lists_to_tuples(default_collate(batch))	
 
 
 def _lists_to_tuples(x):
@@ -96,12 +98,20 @@ save_model_path = "./checkpoints/xray_resnet/{phase}_{timestamp}.pt"
 save_logs_path = "./logs/xray_{phase}_{timestamp}.log"
 
 
-def save(model=None, params=None, logs=None, model_path=save_model_path, logs_path=save_logs_path):
+def save(model=None, params=None, logs=None, model_path=None, logs_path=None):
+	if model_path is None:
+		model_path = save_model_path
+	if logs_path is None:
+		logs_path = save_logs_path
+	
 	timestamp = datetime.today().strftime('%m_%d_%H%M%S')
+
+	if not isinstance(params, dict):
+		params = params.__dict__
 
 	if logs is not None:
 		try:
-			p = logs_path.format(phase=params.phase, timestamp=timestamp)
+			p = logs_path.format(phase=params['phase'], timestamp=timestamp)
 			print(f"Saving logs to {p}")
 			with open(p, "w+") as f:
 				o = vars(params).copy()
@@ -117,7 +127,7 @@ def save(model=None, params=None, logs=None, model_path=save_model_path, logs_pa
 
 	if model is not None:
 		try:
-			p = model_path.format(phase=params.phase if params is not None else '', timestamp=timestamp)
+			p = model_path.format(phase=params['phase'] if params is not None else '', timestamp=timestamp)
 			print(f"Saving model to {p}")
 			torch.save(model.state_dict(), p)
 		except Exception as e:

@@ -7,7 +7,7 @@ from typing import List
 
 import torch.nn
 
-from sim import fl_params
+import sim.gvars as gvars
 from sim.messages import *
 from sim.transport import InProcessTransportSocket, TransportSocket
 from training import training
@@ -45,6 +45,7 @@ class FederatedLearningClient:
 	key_phase_group: List[ClientID]
 	peers: dict[ClientID, TransportSocket]
 	listeners: set[asyncio.Task]
+	trained_epochs: int
 
 	def __init__(self, client_id, dataset):
 		self.client_id = client_id
@@ -62,8 +63,10 @@ class FederatedLearningClient:
 		self.received_shares = {}
 		self.peers = {}
 		self.listeners = set()
+		self.trained_epochs = 0
 		self.key_phase_group = []
 		self.join_event = asyncio.Event()
+
 
 	def start(self):
 		self.loop_task = asyncio.create_task(self.loop())
@@ -99,6 +102,7 @@ class FederatedLearningClient:
 		params.log_prefix = f"[{self.client_id}] "
 		self.training_params = params
 
+
 	def start_training(self):
 		self.training = True
 		self.training_task = asyncio.create_task(asyncio.to_thread(self.do_training_step))
@@ -110,7 +114,7 @@ class FederatedLearningClient:
 		if exc is not None:
 			traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
 		else:
-			if fl_params.use_smpc:
+			if gvars.fl_params.use_smpc:
 				await self.push_encrypted_update()
 			else:
 				self.aggregator.send(EncryptedDeltaPush(EncryptedWeightsDelta(
@@ -133,13 +137,15 @@ class FederatedLearningClient:
 
 	def do_training_step(self):
 		params = self.training_params
-		self.logger.info("starting training")
-		data_loader = xray_training.make_train_loader(params, self.dataset, batch_size=params.batch_size, drop_last=True)
-		for epoch in range(params.epochs):
+		epochs = min(gvars.fl_params.epochs_per_round, params.epochs - self.trained_epochs)
+		self.logger.info(f"starting training for {epochs} epochs")
+		for epoch in range(epochs):
+			epoch += self.trained_epochs
 			self.logger.debug(" Training epoch %d", epoch)
 			start_time = time.time()
-			self.training_losses.append(training.train(self.model, params, data_loader, epoch=epoch))
+			self.training_losses.append(training.train(self.model, params | dict(epochs=gvars.fl_params.epochs_per_round), self.data_loader, epoch=epoch))
 			self.training_times.append(time.time() - start_time)
+			self.trained_epochs += 1
 
 	def apply_delta(self, delta: WeightDiff):
 		Weights(self.model).add(delta)
@@ -228,7 +234,11 @@ class FederatedLearningClient:
 		await self.do_peer_exchange()
 
 	def handle_round_end(self, msg: RoundEnd):
-		pass
+		if msg.success:
+			if msg.round != self.current_round or self.local_rev != msg.delta.rev_a:
+				raise InvalidStateException()
+		self.apply_delta(msg.delta.diff)
+		self.local_rev = msg.delta.rev_b
 
 	async def handle_federation_response(self, msg: FederationResponse):
 		self.global_rev = msg.global_model_rev
