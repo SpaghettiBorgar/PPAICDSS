@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from functools import reduce
 from typing import List, OrderedDict, override
 
-from sim import fl_params
+import sim.gvars as gvars
 from sim.messages import *
 from sim.time import get_time
 from sim.transport import TransportSocket
@@ -14,7 +14,6 @@ from util.utils import chunk_with_min_remainder
 
 logger = logging.getLogger("Aggregator")
 
-ROUND_PERIOD = 120
 
 
 class AggregationException(Exception):
@@ -55,6 +54,7 @@ class Aggregator:
 	aggregation_strategy: AggregationStrategy
 	loop_task: asyncio.Task
 	round_end_event: asyncio.Event
+	round_deadline_task: asyncio.Task | None
 	smpc_groups: List[List[ClientID]]
 	smpc_key_shares: dict[ClientID, KeyShare]
 	ending_round: bool
@@ -68,6 +68,7 @@ class Aggregator:
 		self.current_round = None
 		self.listeners = set()
 		self.round_end_event = asyncio.Event()
+		self.round_deadline_task = None
 		self.ending_round = False
 
 	def start(self):
@@ -75,6 +76,8 @@ class Aggregator:
 
 	def shutdown(self):
 		logger.info("Aggregator shutting down")
+		if self.round_deadline_task is not None:
+			self.round_deadline_task.cancel()
 		self.loop_task.cancel()
 
 	async def loop(self):
@@ -141,21 +144,41 @@ class Aggregator:
 			return
 		num_deltas = len(self.current_round_deltas)
 		if num_deltas == len(self.clients):
-			self.ending_round = True
-		if get_time() > self.current_round.deadline:
-			self.ending_round = True
-		if self.ending_round:
-			asyncio.create_task(self.end_round())
+			self.begin_round_end()
+		elif get_time() >= self.current_round.deadline:
+			self.begin_round_end(timeout=True)
+
+	def begin_round_end(self, timeout=False):
+		if timeout:
+			logger.info("Timeout reached.")
+		if self.current_round is None or self.ending_round:
+			return
+		self.ending_round = True
+		missing_clients = [c_id for c_id in self.clients.keys() if c_id not in self.current_round_deltas]
+		logger.info(f"Ending round. Missing clients: {missing_clients}")
+		if self.round_deadline_task is not None:
+			self.round_deadline_task.cancel()
+			self.round_deadline_task = None
+		asyncio.create_task(self.end_round())
+
+	async def watch_round_deadline(self, round_id: int, deadline: Timestamp):
+		try:
+			await asyncio.sleep(max(0, deadline - get_time()))
+			if self.current_round is not None and self.current_round.round_id == round_id:
+				self.begin_round_end(timeout=True)
+		except asyncio.CancelledError:
+			raise
 
 	async def start_key_phase(self):
 		self.smpc_groups = []
 		self.smpc_key_shares = {}
-		for client_state in self.clients.values():
-			client_state.socket.send(Ping())
+		for client_id, client_state in self.clients.items():
+			if client_id in self.current_round_deltas:
+				client_state.socket.send(Ping())
 		await asyncio.sleep(0)
 		await asyncio.sleep(4)
 		threshold = get_time() - 5
-		surviving_clients = [c_id for c_id, c_state in self.clients.items() if c_state.last_ping > threshold]
+		surviving_clients = [c_id for c_id, c_state in self.clients.items() if c_id in self.current_round_deltas and c_state.last_ping > threshold]
 		logger.info("Surviving clients: %s", surviving_clients)
 		self.smpc_groups = chunk_with_min_remainder(surviving_clients, n=3, n_min=2)
 		logger.info("Starting key phase with groups %s", self.smpc_groups)
@@ -166,13 +189,13 @@ class Aggregator:
 	async def handle_smpc_key_share(self, msg: SMPCKeyShare, client_id):
 		group = next(g for g in self.smpc_groups if client_id in g)
 		self.smpc_key_shares[client_id] = msg.key_share
-		if len(self.smpc_key_shares) == len(group):
+		if len(self.smpc_key_shares) == sum(len(g) for g in self.smpc_groups):
 			asyncio.create_task(self.aggregate())
 
 	async def aggregate(self):
 		assert self.current_round is not None
 		logger.info(f"Aggregating {len(self.current_round_deltas)} deltas")
-		if fl_params.use_smpc:
+		if gvars.fl_params.use_smpc:
 			deltas = []
 			for group in self.smpc_groups:
 				try:
@@ -187,6 +210,8 @@ class Aggregator:
 			deltas = list(self.current_round_deltas.values())
 
 		try:
+			if len(deltas) == 0:
+				raise AggregationException("No deltas available for aggregation")
 			aggregate = self.aggregation_strategy.aggregate_deltas(deltas)
 			assert self.current_round is not None
 			msg = RoundEnd(round=self.current_round, success=True,
@@ -198,10 +223,13 @@ class Aggregator:
 		finally:
 			for client_state in self.clients.values():
 				client_state.socket.send(msg)
+			if self.round_deadline_task is not None:
+				self.round_deadline_task.cancel()
+				self.round_deadline_task = None
 			self.round_end_event.set()
 
 	async def end_round(self):
-		if fl_params.use_smpc:
+		if gvars.fl_params.use_smpc:
 			await self.start_key_phase()
 		else:
 			await self.aggregate()
@@ -210,15 +238,20 @@ class Aggregator:
 		return sum_((self.weight_deltas[d] for d in self.weight_deltas if rev_a < d <= rev_b))
 
 	async def start_new_round(self):
+		if self.round_deadline_task is not None:
+			self.round_deadline_task.cancel()
+			self.round_deadline_task = None
 		self.round_end_event.clear()
 		self.ending_round = False
 		self.current_round = Round(
 			round_id=(self.current_round.round_id if self.current_round is not None else 0) + 1,
 			rev_a=self.global_model_rev,
 			rev_b=self.global_model_rev + 1,
-			deadline=get_time() + ROUND_PERIOD)
+			deadline=get_time() + gvars.fl_params.round_timeout)
 		logger.info("Starting round %s", self.current_round)
 		self.current_round_deltas = {}
+		self.round_deadline_task = asyncio.create_task(
+			self.watch_round_deadline(self.current_round.round_id, self.current_round.deadline))
 		for client_state in self.clients.values():
 			client_state.socket.send(RoundAnnounce(round=self.current_round))
 
