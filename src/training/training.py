@@ -77,6 +77,7 @@ hamming_norm = lambda target, output: torch.norm(target - output, dim=1, p=1).me
 
 
 def test(model: torch.nn.Module, params: Params, test_loader: DataLoader, criterion: TestCriterionType = hamming_norm):
+	print(f"Testing model on {len(test_loader)} points")
 	fix_collate(test_loader)
 	model.eval()
 
@@ -104,25 +105,34 @@ def save(model=None, params=None, logs=None, model_path=None, logs_path=None):
 	if logs_path is None:
 		logs_path = save_logs_path
 	
+	if model is None:
+		print("[save] model is None")
+
+	if logs is None:
+		print("[save] logs is None")
+
 	timestamp = datetime.today().strftime('%m_%d_%H%M%S')
 
-	if not isinstance(params, dict):
-		params = params.__dict__
+	if params is not None:
+		if not isinstance(params, dict):
+			params = params.__dict__
+		props = {k: v for k, v in params.items() if not k.startswith("_")}.copy()
 
 	if logs is not None:
 		try:
-			p = logs_path.format(phase=params['phase'], timestamp=timestamp)
+			p = logs_path.format(phase=props['phase'], timestamp=timestamp)
 			print(f"Saving logs to {p}")
 			with open(p, "w+") as f:
-				o = vars(params).copy()
 				if logs is not None:
-					o.update(
+					props.update(
 						epoch_time=logs['time'],
 						loss_history=logs['loss'],
 						acc_history=logs['acc']
 					)
-				f.write(json.dumps(o, default=str, indent='\t'))
+				f.write(json.dumps(props, default=str, indent='\t'))
 		except Exception as e:
+			print("exception occured when saving logs")
+			print(props)
 			print(e)
 
 	if model is not None:
@@ -131,7 +141,10 @@ def save(model=None, params=None, logs=None, model_path=None, logs_path=None):
 			print(f"Saving model to {p}")
 			torch.save(model.state_dict(), p)
 		except Exception as e:
+			print("exception occured when saving model")
 			print(e)
+
+	print("save() done")
 
 
 do_save = lambda: None
@@ -151,7 +164,7 @@ def run(model: torch.nn.Module, params: Params, train_dataloader: DataLoader, te
 		print(f"Begin epoch {epoch}")
 		start = time.time()
 
-		loss_history += train(model, params, train_dataloader, epoch)
+		loss_history.append(train(model, params, train_dataloader, epoch))
 
 		epoch_time = time.time() - start
 		time_history.append(epoch_time)
@@ -161,8 +174,9 @@ def run(model: torch.nn.Module, params: Params, train_dataloader: DataLoader, te
 		acc_history.append(acc)
 		print(f"Acc:  {acc_history[-1]:.6f}")
 
-		if params.save and epoch % 1 == 0 and epoch != params.epochs - 1:
+		if params.save and epoch % 5 == 0 and epoch != params.epochs - 1:
 			save(model=model, params=params)
 
 	if params.save:
 		do_save()
+0

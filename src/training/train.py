@@ -22,7 +22,7 @@ def parse_args():
 	parser.add_argument("--phase", "-p", type=str, default='testing', help="Training phase parameter preset")
 	parser.add_argument("--save-path", "-o", type=str, default=training.save_model_path, help="Path template for checkpoint output")
 	parser.add_argument("--logs-path", type=str, default=training.save_logs_path, help="Path template for logs output")
-	parser.add_argument("-P", action='append', default=["target_epsilon=10.0", "target_delta=1e-6", "grad_norm=1.0"], help="Override training parameters")
+	parser.add_argument("-P", action='append', default=[], help="Override training parameters")
 	parser.add_argument("--seed", type=int, default=0, help="Global random seed")
 	return parser.parse_args()
 
