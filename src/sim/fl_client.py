@@ -126,7 +126,9 @@ class FederatedLearningClient:
 		self.key = smpc.generate_key_mask(self.rng)
 		delta = self.get_delta()
 		vec, shapes = delta.flatten()
-		vec = smpc.quantize(smpc.normalize(vec))
+		norm = np.linalg.norm(vec)
+		self.logger.debug(f"[clipping] delta is norm={norm}, range={vec.min()}_{vec.max()}, mean={vec.mean()}, std={vec.std()}")
+		vec = smpc.quantize(smpc.clip(vec))
 		crypt_vec = smpc.encrypt(vec, self.key)
 		self.aggregator.send(EncryptedDeltaPush(EncryptedWeightsDelta(
 			rev_a=self.current_round.rev_a,
@@ -153,6 +155,12 @@ class FederatedLearningClient:
 		if self.global_weights is None:
 			raise InvalidStateException()
 		return Weights(self.model) - self.global_weights
+
+	def get_clipped_delta(self) -> Weights:
+		delta = self.get_delta()
+		vec, shapes = delta.flatten()
+		vec = smpc.clip(vec)
+		return Weights.unflatten(vec, shapes)
 
 	def set_weights(self, weights: Weights):
 		Weights(self.model).assign(weights)

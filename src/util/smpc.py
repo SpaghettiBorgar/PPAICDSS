@@ -32,6 +32,13 @@ def normalize(vec):
 		raise ValueError("Trying to normalize zero-vector")
 	return vec / norm
 
+def clip(vec, max_norm=200, max_range=1.0):
+	norm = np.linalg.norm(vec)
+	if norm == 0:
+		raise ValueError("Trying to clip zero-vector")
+	if norm > max_norm:
+		vec = vec * max_norm / norm
+	return np.clip(vec, -max_range, max_range)
 
 def quantize(vec):
 	return np.round(np.clip(vec * QUANT_MAX, QUANT_MIN, QUANT_MAX)).astype(QUANT_DTYPE)
