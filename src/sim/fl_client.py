@@ -116,14 +116,14 @@ class FederatedLearningClient:
 			if gvars.fl_params.use_smpc:
 				await self.push_encrypted_update()
 			else:
-				self.aggregator.send(EncryptedDeltaPush(EncryptedWeightsDelta(
+				self.aggregator.send(DeltaPush(WeightsDelta(
 					rev_a=self.current_round.rev_a,
 					rev_b=self.current_round.rev_b,
-					diff=self.get_delta()
+					diff=self.get_clipped_delta()
 				)))
 
 	async def push_encrypted_update(self):
-		self.key = smpc.generate_key_mask()
+		self.key = smpc.generate_key_mask(self.rng)
 		delta = self.get_delta()
 		vec, shapes = delta.flatten()
 		vec = smpc.quantize(smpc.normalize(vec))
@@ -206,7 +206,7 @@ class FederatedLearningClient:
 	async def do_peer_exchange(self):
 		for peer_id, sock in self.peers.items():
 			if not peer_id in self.key_shares:
-				self.key_shares[peer_id] = smpc.generate_key_mask()
+				self.key_shares[peer_id] = smpc.generate_key_mask(self.rng)
 			self.logger.info(f"Sending key share to {peer_id}")
 			sock.send(SMPCKeyShare(key_share=self.key_shares[peer_id]))
 		if len(self.received_shares) == len(self.key_phase_group) != 0:
@@ -220,13 +220,13 @@ class FederatedLearningClient:
 
 	async def submit_share_sum(self):
 		self.logger.info("Submitting key share sum to aggregator")
-		server_share = smpc.make_last_share(self.key, list(self.received_shares.values()))
-		server_share += sum(self.key_shares.values()) % smpc.MOD
+		server_share = smpc.make_last_share(self.key, list(self.key_shares.values()))
+		server_share = (server_share + sum(self.received_shares.values())) % smpc.MOD
 		self.aggregator.send(SMPCKeyShare(key_share=server_share))
 
 	async def handle_key_phase_announce(self, msg: KeyPhaseAnnounce):
 		self.key_phase_group = msg.group
-		self.received_shares[self.client_id] = self.key_shares[self.client_id] = smpc.generate_key_mask()
+		self.received_shares[self.client_id] = self.key_shares[self.client_id] = smpc.generate_key_mask(self.rng)
 		for client_id in msg.group:
 			if client_id != self.client_id and client_id not in self.peers:
 				self.connect(InProcessTransportSocket.connect_to(dest=client_id, source=self.client_id), client_id)

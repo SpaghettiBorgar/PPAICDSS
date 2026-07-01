@@ -54,7 +54,7 @@ def train_xray_model(phase, checkpoint, device, **extra_params):
 		len(training_data), data_prep.chunk_size, block_size=data_prep.chunk_size // 4, batch_size=params.batch_size)
 
 	loader_args = dict(
-		num_workers=min(os.cpu_count() or 0, 6)
+		num_workers=min(os.cpu_count() or 0, int(os.getenv("DATA_LOADER_WORKERS", 6)))
 	)
 
 	train_dataloader = make_train_loader(params, training_data, **loader_args)

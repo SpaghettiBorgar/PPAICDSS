@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("opacus.validators.batch_norm").setLevel("WARNING")
 logging.getLogger("opacus.validators.module_validator").setLevel("WARNING")
 
-def create_participants(num_hospitals: int, seed: int = None, devices=None) -> List[Hospital]:
+def create_participants(num_hospitals: int, seed: int = 0, devices=None) -> List[Hospital]:
 	hospitals = []
 	partitions = list(random_partitions(range(xray_data.TRAIN_SIZE), num_hospitals, seed=seed, evenness=0.8))
 	logger.info(f"Hospital dataset partitions: {partitions}")
@@ -44,9 +44,11 @@ def create_participants(num_hospitals: int, seed: int = None, devices=None) -> L
 	return hospitals
 
 
-def initialize_participants(hospitals: List[Hospital], aggregator: Aggregator, phase='testing', **kwargs):
+def initialize_participants(hospitals: List[Hospital], aggregator: Aggregator, phase='testing', seed=0, **kwargs):
 	for hosp in hospitals:
+		torch.manual_seed(seed)
 		params = XrayParams(phase, device=hosp.device, **kwargs)
+		model = params.get_model()
 		client = hosp.fl_projects['cxr']
 		client.set_params(params, init=True)
 		client.dataset.transform = params.get_transform()
@@ -75,7 +77,8 @@ def establish_connection(client: FederatedLearningClient, aggregator: Aggregator
 	aggregator.connect(transport.create_socket())
 
 
-async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None, devices=None, seed=None, **extra_params):
+async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None, devices=None, seed=0, **extra_params):
+	torch.manual_seed(seed)
 	device_count = torch.cuda.device_count()
 	devices = [f"cuda:{i}" for i in range(device_count)] if devices is None else devices
 
@@ -88,6 +91,7 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 
 	for phase_i, phase in enumerate(phases):
 		params = dict(checkpoint=checkpoint, save=False) | extra_params
+		save_params = {}
 
 		epochs_remaining = XRAY_PHASES[phase]['epochs']
 
@@ -96,7 +100,7 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 		if phase_i == 0:
 			aggregator.start()
 			logger.info("Aggregator started")
-			initialize_participants(hospitals, aggregator, phase=phase, **params)
+			initialize_participants(hospitals, aggregator, phase=phase, seed=seed, **params)
 			logger.info("Clients initialized")
 			await setup_federation(hospitals)
 			logger.info("Federation set up")
@@ -111,7 +115,7 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 		)
 
 		test_params = XrayParams(**(params | dict(resolution=600, batch_size=256, device="cuda")))
-		test_dataset = XrayDataset(offset=xray_data.TEST_OFFSET, transform=test_params.get_transform())
+		test_dataset = XrayDataset(offset=xray_data.TEST_OFFSET, size=2000, transform=test_params.get_transform())
 		test_loader = xray_training.make_test_loader(test_params, test_dataset)
 
 		sim.time.init_time()
@@ -173,6 +177,8 @@ def parse_args():
 	parser.add_argument("--epochs-per-round", "-r", type=int, default=2, help="Number of epochs per round")
 	parser.add_argument("--phase", "-p", action='append', type=str, default=[], help="Training phases for parameter presets")
 	parser.add_argument("--checkpoint", "-c", type=str, default=None, help="Model checkpoint to load")
+	parser.add_argument("--save-path", "-o", type=str, default=training.save_model_path, help="Path template for checkpoint output")
+	parser.add_argument("--logs-path", type=str, default=training.save_logs_path, help="Path template for logs output")
 	parser.add_argument("--devices", "-d", action='append', type=str, default=None, help="Devices to use for participants (default: all available GPUs)")
 	parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
 	parser.add_argument("--use-smpc", type=lambda x: x.lower() in ['true', 'yes'], choices=[True, False], default=True, help="Use SMPC for secure aggregation")
@@ -183,9 +189,11 @@ def parse_args():
 
 def main():
 	args = parse_args()
+	training.save_model_path = args.save_path
+	training.save_logs_path = args.logs_path
 	gvars.fl_params.use_smpc = args.use_smpc
-	gvars.epochs_per_round = args.epochs_per_round
-	gvars.round_timeout = args.round_timeout
+	gvars.fl_params.epochs_per_round = args.epochs_per_round
+	gvars.fl_params.round_timeout = args.round_timeout
 	
 	extra_params = {k: auto_type(v) for (k, v) in [p.partition('=')[::2] for p in args.P]}
 
