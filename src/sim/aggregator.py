@@ -78,7 +78,10 @@ class Aggregator:
 		logger.info("Aggregator shutting down")
 		if self.round_deadline_task is not None:
 			self.round_deadline_task.cancel()
-		self.loop_task.cancel()
+		try:
+			self.loop_task.cancel()
+		except AttributeError:
+			logger.warning("Aggregator wasn't running")
 
 	async def loop(self):
 		logger.info("Aggregator running")
@@ -238,6 +241,10 @@ class Aggregator:
 		return sum_((self.weight_deltas[d] for d in self.weight_deltas if rev_a < d <= rev_b))
 
 	async def start_new_round(self):
+		if len(self.clients) == 0:
+			logger.error("No clients connected, cannot start new round")
+			raise InvalidStateException()
+
 		if self.round_deadline_task is not None:
 			self.round_deadline_task.cancel()
 			self.round_deadline_task = None
@@ -256,6 +263,7 @@ class Aggregator:
 			client_state.socket.send(RoundAnnounce(round=self.current_round))
 
 	def connect(self, sock: TransportSocket):
+		logger.debug("Aggregator connected to %s", sock)
 		self.connections[sock] = None
 		task = asyncio.create_task(self._listen(sock))
 		self.listeners.add(task)

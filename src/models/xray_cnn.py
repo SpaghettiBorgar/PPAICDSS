@@ -64,6 +64,7 @@ class XrayModel(nn.Module):
 			try:
 				self.load_state_dict(weights)
 			except RuntimeError:
+				print("Converting DP weights")
 				self.load_state_dict(convert_dp_state_dict(weights))
 
 	def make_private_compatible(self):

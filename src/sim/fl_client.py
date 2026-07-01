@@ -67,7 +67,6 @@ class FederatedLearningClient:
 		self.key_phase_group = []
 		self.join_event = asyncio.Event()
 
-
 	def start(self):
 		self.loop_task = asyncio.create_task(self.loop())
 

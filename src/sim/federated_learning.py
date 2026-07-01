@@ -15,6 +15,7 @@ from training import training
 from training.xray import xray_data, xray_training
 from training.xray.xray_data import XrayDataset
 from training.xray.xray_params import XrayParams, PHASES as XRAY_PHASES
+from util.timer import Timer
 from util.utils import random_partitions, auto_type
 import warnings
 import re
@@ -29,7 +30,8 @@ logging.getLogger("opacus.validators.module_validator").setLevel("WARNING")
 
 def create_participants(num_hospitals: int, seed: int = None, devices=None) -> List[Hospital]:
 	hospitals = []
-	partitions = random_partitions(range(xray_data.TRAIN_SIZE), num_hospitals, seed=seed, evenness=0.8)
+	partitions = list(random_partitions(range(xray_data.TRAIN_SIZE), num_hospitals, seed=seed, evenness=0.8))
+	logger.info(f"Hospital dataset partitions: {partitions}")
 	for i, p in enumerate(partitions):
 		hosp = Hospital(f"Hospital {i}", device=devices[i % len(devices)] if devices is not None else "cuda")
 		hosp.add_project('cxr', FederatedLearningClient(
@@ -38,6 +40,7 @@ def create_participants(num_hospitals: int, seed: int = None, devices=None) -> L
 		))
 		hospitals.append(hosp)
 		inprocess_address_space[hosp.name] = hosp.fl_projects['cxr']
+		gvars.fl_clients[hosp.name] = hosp.fl_projects['cxr']
 	return hospitals
 
 
@@ -81,7 +84,8 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 	hospitals = create_participants(num_participants, devices=devices, seed=seed)
 	aggregator = Aggregator()
 	inprocess_address_space['aggregator'] = aggregator
-	
+	total_time = 0
+
 	for phase_i, phase in enumerate(phases):
 		params = dict(checkpoint=checkpoint, save=False) | extra_params
 
@@ -116,24 +120,45 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 		for round in range(rounds):
 			logger.info("Starting round %d", round)
 
-			await aggregator.start_new_round()
-			await aggregator.round_end_event.wait()
+			timer = Timer(print=False)
+			with timer:
+				await aggregator.start_new_round()
+				await aggregator.round_end_event.wait()
+			logger.info(f"Round done, took {timer.elapsed} seconds")
+			total_time += timer.elapsed
 
 			models = [hosp.fl_projects['cxr'].model for hosp in hospitals]
 			logs['time'].append([hosp.fl_projects['cxr'].training_times for hosp in hospitals])
 			logs['loss'].append([hosp.fl_projects['cxr'].training_losses for hosp in hospitals])
-			logs['acc'].append(training.test(models[0], test_params, test_loader))
+			try:
+				acc = training.test(models[0], test_params, test_loader)
+				logger.info(f"Model acc: {acc}")
+				logs['acc'].append(acc)
+			except Exception as e:
+				logger.error("Error during model testing")
+				logger.error(e)
 
 			save_params = hospitals[0].fl_projects['cxr'].training_params.__dict__.copy()
 
 		logger.info(f"Phase {phase} done")
 		models = [hosp.fl_projects['cxr'].model for hosp in hospitals]
 
-		save_params['phase'] = f"fl_{phase}"
-		save_params['argv'] = sys.argv
-		training.save(models[0], params, logs)
+		try:
+			logger.info("Saving model")
+			save_params.update(
+				phase=f"fl_{phase}",
+				argv=sys.argv)
+			training.save(models[0], save_params, logs)
+			logger.debug("Saving model done")
+		except Exception:
+			logger.error("Exception occured during saving")
+			import traceback
+			traceback.print_exc()
+			# logger.error(e)
 
-	logger.info("Rounds ended, shutting down")
+
+	logger.info("All phases done, shutting down")
+	logger.info(f"Total simulation time: {total_time}")
 	aggregator.shutdown()
 	for hosp in hospitals:
 		hosp.fl_projects['cxr'].shutdown()

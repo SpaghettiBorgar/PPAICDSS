@@ -5,3 +5,5 @@ fl_params = SimpleNamespace(
     epochs_per_round=2,
     round_timeout=float('inf')
 )
+
+fl_clients = {}
