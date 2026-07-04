@@ -4,6 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Callable, TypeAlias, List, override
 
+from sim import gvars
 from sim.messages import Message
 
 ReceiveCallback: TypeAlias = Callable[[Message], None]
@@ -62,7 +63,7 @@ class InProcessTransport:
 	latency: float
 	_dispatch_tasks: set[asyncio.Task]
 
-	def __init__(self, latency=0.):
+	def __init__(self, latency=gvars.fl_params.latency):
 		self.endpoints = []
 		self.latency = latency
 		self._dispatch_tasks = set()

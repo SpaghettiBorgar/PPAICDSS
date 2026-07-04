@@ -204,6 +204,10 @@ def main():
 	gvars.fl_params.use_smpc = args.use_smpc
 	gvars.fl_params.epochs_per_round = args.epochs_per_round
 	gvars.fl_params.round_timeout = args.round_timeout
+
+
+	if len(args.phase) == 0:
+		args.phase = ['testing']
 	
 	extra_params = {k: auto_type(v) for (k, v) in [p.partition('=')[::2] for p in args.P]}
 
