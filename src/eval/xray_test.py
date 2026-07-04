@@ -5,12 +5,14 @@ import signal
 from itertools import batched
 
 import torch
+from torch.utils.data import DataLoader, Subset
 from torchvision.transforms import v2, InterpolationMode
 
 from models import xray_cnn
 from training.xray.xray_data import XrayDataset, LABELS_SHORT as LABELS
 from training.xray.xray_params import XrayParams
 from util.mapping import tree_map
+from util.utils import fix_collate
 
 
 def print_pair_table(A: torch.Tensor, B: torch.Tensor, indices=None, labels=LABELS, print_rows=True, print_stats=True):
@@ -193,7 +195,7 @@ def print_auroc_table(targets: torch.Tensor, outputs: torch.Tensor, labels=LABEL
 	print(f"Macro AUROC: {macro_str}")
 
 
-def test_xray_model(checkpoint, num_samples=64, res: int | None = 600, crop: bool = True, device="cuda", offset=200000):
+def test_xray_model(checkpoint, num_samples=64, print_samples: int | None = None, res: int | None = 600, crop: bool = True, device="cuda", offset=200000):
 	params = XrayParams(checkpoint=checkpoint, device=device)
 	print(f"Testing model {params.checkpoint}")
 	model = params.get_model()
@@ -217,25 +219,50 @@ def test_xray_model(checkpoint, num_samples=64, res: int | None = 600, crop: boo
 
 	model.eval()
 	torch.set_grad_enabled(False)
-	idxs = range(min(len(dataset), num_samples))
+	n_samples = min(len(dataset), num_samples)
 
 	all_targets = torch.empty((0, len(LABELS)))
 	all_outputs = torch.empty((0, len(LABELS)))
-	for idxs in batched(idxs, 16):
-		if do_quit:
-			break
-		real_idxs = []
-		targets = []
-		outputs = []
-		for i in idxs:
+	printed_samples = 0
+
+	def record_batch(targets, outputs, real_idxs):
+		nonlocal all_targets, all_outputs, printed_samples
+		targets, outputs = targets.cpu(), outputs.cpu()
+		rows_to_print = len(real_idxs) if print_samples is None else max(0, min(len(real_idxs), print_samples - printed_samples))
+		if rows_to_print > 0:
+			print()
+			print_pair_table(targets[:rows_to_print], outputs[:rows_to_print], real_idxs[:rows_to_print])
+			printed_samples += rows_to_print
+		all_targets, all_outputs = torch.cat((all_targets, targets.clone())), torch.cat((all_outputs, outputs.clone()))
+
+	if res is not None and crop:
+		loader = DataLoader(Subset(dataset, range(n_samples)), batch_size=16, shuffle=False)
+		fix_collate(loader)
+		for batch_idx, (inp, targets) in enumerate(loader):
 			if do_quit:
 				break
-			inp, target = dataset[i]
-			inp, target = tree_map(lambda t: t.to(device).unsqueeze(0), (inp, target))
-			output = model(inp).sigmoid()
-			real_idxs.append(dataset.real_index(i))
-			targets.append(target)
-			outputs.append(output)
+			inp, targets = tree_map(lambda t: t.to(device), (inp, targets))
+			outputs = model(inp).sigmoid()
+			start = batch_idx * loader.batch_size
+			real_idxs = [dataset.real_index(i) for i in range(start, start + len(targets))]
+			record_batch(targets, outputs, real_idxs)
+	else:
+		idxs = range(n_samples)
+		for idxs in batched(idxs, 16):
+			if do_quit:
+				break
+			real_idxs = []
+			targets = []
+			outputs = []
+			for i in idxs:
+				if do_quit:
+					break
+				inp, target = dataset[i]
+				inp, target = tree_map(lambda t: t.to(device).unsqueeze(0), (inp, target))
+				output = model(inp).sigmoid()
+				real_idxs.append(dataset.real_index(i))
+				targets.append(target)
+				outputs.append(output)
 
 		targets, outputs = torch.cat(targets).cpu(), torch.cat(outputs).cpu()
 		print()
@@ -253,8 +280,9 @@ def parse_args():
 	parser.add_argument("--device", type=str, default="cuda", help="Device to use")
 	parser.add_argument("--checkpoint", "-c", type=str, default="latest", help="Model checkpoint to load")
 	parser.add_argument("--resolution", "-R", type=int, default=None, help="Max side length to scale images to")
-	parser.add_argument("--crop", "-C", type=bool, default=False, help="Crop/pad images to square")
+	parser.add_argument("--crop", "-C", type=lambda x: x.lower() in ['true', 'yes'], choices=[True, False], default=True, help="Crop/pad images to square")
 	parser.add_argument("--num-samples", "-N", type=int, default=20000, help="Number of samples to test")
+	parser.add_argument("--print-samples", "-p", type=int, default=None, help="Number of tested samples to explicitly print")
 	parser.add_argument("--offset", "-O", type=int, default=200000, help="Sample index offset")
 
 	return parser.parse_args()
@@ -262,4 +290,4 @@ def parse_args():
 
 if __name__ == '__main__':
 	args = parse_args()
-	test_xray_model(args.checkpoint, num_samples=args.num_samples, res=args.resolution, crop=args.crop, device=args.device, offset=args.offset)
+	test_xray_model(args.checkpoint, num_samples=args.num_samples, print_samples=args.print_samples, res=args.resolution, crop=args.crop, device=args.device, offset=args.offset)
