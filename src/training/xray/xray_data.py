@@ -32,6 +32,7 @@ CLASS_POS_WEIGHTS = DATASET_TOTAL_SAMPLES / torch.tensor(list(CLASS_WEIGHTS.valu
 TOTAL_SAMPLES = int(os.getenv("TRAIN_DATA_COUNT", default=221121))
 TEST_OFFSET = - min(20000, TOTAL_SAMPLES // 10)
 TRAIN_SIZE = TOTAL_SAMPLES + TEST_OFFSET
+TRAIN_SIZE &= ~1 # avoid single-batch edge case
 
 import data_prep
 

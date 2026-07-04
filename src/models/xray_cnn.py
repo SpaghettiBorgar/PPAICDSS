@@ -22,7 +22,7 @@ def get_latest_checkpoint(checkpoints_dir=checkpoints_dir, filter: Callable[[str
 
 
 class XrayModel(nn.Module):
-	def __init__(self, num_classes=14, xray_view_dim=5, weights=None, backend=lambda: models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1), **_):
+	def __init__(self, num_classes=14, xray_view_dim=5, backend=lambda: models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1), **_):
 		super().__init__()
 
 		self.xray_view_dim = xray_view_dim
@@ -56,26 +56,32 @@ class XrayModel(nn.Module):
 		)
 
 		# Make compatible with opacus DP
-		self.backend = ModuleValidator.fix(self.backend)
-		self.classifier = ModuleValidator.fix(self.classifier)
-		self.make_private_compatible()
+		# self.backend = ModuleValidator.fix(self.backend)
+		# self.classifier = ModuleValidator.fix(self.classifier)
+		# self.make_private_compatible()
 
+
+	# def make_private_compatible(self):
+		# make_model_dp_compatible(self)
+
+	@classmethod
+	def load_weights(cls, module, weights):
 		if weights is not None:
 			try:
-				self.load_state_dict(weights)
+				module.load_state_dict(weights)
 			except RuntimeError:
 				print("Converting DP weights")
-				self.load_state_dict(convert_dp_state_dict(weights))
+				module.load_state_dict(convert_dp_state_dict(weights))
+		return module
 
-	def make_private_compatible(self):
-		make_model_dp_compatible(self)
 
 	def forward(self, x: Tuple[torch.Tensor, torch.Tensor] | torch.Tensor):
-		if isinstance(x, tuple):
+		# for tuple input, make sure to fix the data loader with util.utils.fix_collate() to preserve tuples in batches
+		try:
 			x, xray_view = x
-		else:
+		except Exception:
 			xray_view = torch.zeros((x.shape[0], self.xray_view_dim), device=x.device)
-
+		
 		x = self.backend(x)
 		xray_view = self.metanet(xray_view.to(x.dtype))
 

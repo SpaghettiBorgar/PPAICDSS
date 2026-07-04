@@ -61,17 +61,64 @@ def _safe_densenet_forward(self, x: torch.Tensor) -> torch.Tensor:
 	return out
 
 
-def make_model_dp_compatible(model: nn.Module) -> nn.Module:
+def make_model_dp_compatible(model: nn.Module, swap_blocks = True) -> nn.Module:
 	for module in model.modules():
 		if isinstance(getattr(module, "inplace", None), bool):
 			module.inplace = False
-		if isinstance(module, BasicBlock):
-			module.forward = types.MethodType(_safe_basic_block_forward, module)
-		elif isinstance(module, Bottleneck):
-			module.forward = types.MethodType(_safe_bottleneck_forward, module)
-		elif isinstance(module, DenseNet):
-			module.forward = types.MethodType(_safe_densenet_forward, module)
+		if swap_blocks:
+			if isinstance(module, BasicBlock):
+				module.forward = types.MethodType(_safe_basic_block_forward, module)
+			elif isinstance(module, Bottleneck):
+				module.forward = types.MethodType(_safe_bottleneck_forward, module)
+			elif isinstance(module, DenseNet):
+				module.forward = types.MethodType(_safe_densenet_forward, module)
 	return model
+
+import operator
+import torch.fx as fx
+
+# https://github.com/meta-pytorch/opacus/issues/828
+
+_INPLACE_OPS = {
+	operator.iadd: operator.add,
+	operator.isub: operator.sub,
+	operator.imul: operator.mul,
+	operator.itruediv: operator.truediv,
+}
+
+def fix_inplace(model: nn.Module) -> nn.Module:
+	"""Replace all in-place operations in ``model`` with out-of-place equivalents.
+
+	Flips module-level ``inplace`` flags (e.g. ``ReLU``), then uses
+	``torch.fx.symbolic_trace`` to rewrite ``+=`` and in-place methods/functions.
+	"""
+
+	for m in model.modules():
+		if hasattr(m, "inplace"):
+			m.inplace = False
+
+	gm = fx.symbolic_trace(model)
+
+	for node in gm.graph.nodes:
+		if node.op == "call_function":
+			if node.target in _INPLACE_OPS:
+				node.target = _INPLACE_OPS[node.target]
+			elif callable(node.target):
+				name = getattr(node.target, "__name__", "")
+				if name.endswith("_") and not name.endswith("__"):
+					oop = getattr(torch, name[:-1], None)
+					if oop is not None:
+						node.target = oop
+
+		elif node.op == "call_method" and isinstance(node.target, str):
+			if node.target.endswith("_") and not node.target.endswith("__"):
+				stripped = node.target[:-1]
+				if hasattr(torch.Tensor, stripped):
+					node.target = stripped
+
+	gm.graph.lint()
+	gm.recompile()
+	return gm
 
 def check_dp_params(params: dict | Params):
 	params = params.__dict__
@@ -82,7 +129,7 @@ def check_dp_params(params: dict | Params):
 	return 'grad_norm' in params
 
 def make_private_auto(model, optimizer, data_loader, params):
-	from training.training import fix_collate
+	from util.utils import fix_collate
 	fix_collate(data_loader)
 	check_dp_params(params)
 	if params.target_epsilon is not None and params.target_delta is not None and params.grad_norm is not None:

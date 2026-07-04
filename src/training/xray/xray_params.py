@@ -1,11 +1,15 @@
+import os
 from typing import TypeAlias, Union, override
 
+from opacus.validators import ModuleValidator
 import torch
+from torchgen import model
 from torchvision.transforms import InterpolationMode, v2
 
 from models.xray_cnn import XrayModel, get_latest_checkpoint
 from training.params import Params
 from training.xray.xray_data import CLASS_POS_WEIGHTS
+from util.dp_compat import fix_inplace
 
 PhaseType: TypeAlias = Union[str, int, None]
 
@@ -45,9 +49,16 @@ class XrayParams(Params):
 		return self._transform
 
 	@override
-	def get_model(self):
+	def get_model(self) -> XrayModel:
 		if self._model is None:
-			self._model = XrayModel(weights=self.get_weights()).to(self.device)
+			self._model = XrayModel().to(self.device)
+			if os.environ.get("DP_FIX_INPLACE", "0") == "1":
+				print("fixing inplace ops")
+				self._model = fix_inplace(self._model)
+			if os.environ.get("DP_VALIDATOR_FIX", "0") == "1":
+				print("using ModuleValidator.fix()")
+				self._model = ModuleValidator.fix(self._model)
+			self._model = XrayModel.load_weights(self._model, self.get_weights())
 			if self.freeze_backend:
 				for param in self._model.backend.parameters():
 					param.requires_grad = False
