@@ -52,7 +52,7 @@ class FederatedLearningClient:
 		self.logger = logging.getLogger(client_id)
 		self.dataset = dataset
 		self.model = None
-		self.local_rev = 0
+		self.local_rev = -1
 		self.global_weights = None
 		self.waiting_for_update = False
 		self.training = False
@@ -159,6 +159,7 @@ class FederatedLearningClient:
 	def get_clipped_delta(self) -> Weights:
 		delta = self.get_delta()
 		vec, shapes = delta.flatten()
+		self.logger.debug(f"[clipping] delta is norm={np.linalg.norm(vec)}, range={vec.min()}_{vec.max()}, mean={vec.mean()}, std={vec.std()}")
 		vec = smpc.clip(vec)
 		return Weights.unflatten(vec, shapes)
 
@@ -169,9 +170,14 @@ class FederatedLearningClient:
 		self.model = model
 		weights = Weights(self.model)
 		MODEL_SHAPES[self.client_id] = weights.shapes()
-		self.global_weights = weights * 0
+		if self.global_weights is None:
+			self.global_weights = weights * 0
 
 	async def update_if_necessary(self):
+		if self.waiting_for_update:
+			return True
+		if self.local_rev == -1:
+			Weights(self.model).mul(0)
 		if self.local_rev < self.global_rev:
 			self.aggregator.send(UpdateRequest(rev_a=self.local_rev, rev_b=0))
 			return True
@@ -244,12 +250,17 @@ class FederatedLearningClient:
 		if msg.success:
 			if msg.round != self.current_round or self.local_rev != msg.delta.rev_a:
 				raise InvalidStateException()
+		self.old_weights = Weights(self.model) * 1.0
+		Weights(self.model).assign(self.global_weights)
 		self.apply_delta(msg.delta.diff)
+		gdelta = (Weights(self.model) - self.old_weights).flatten()[0]
+		self.logger.debug(f"global update delta norm={np.linalg.norm(gdelta)} range={gdelta.min()}_{gdelta.max()} mean={gdelta.mean()} std={gdelta.std()}")
 		self.local_rev = msg.delta.rev_b
 
 	async def handle_federation_response(self, msg: FederationResponse):
 		self.global_rev = msg.global_model_rev
-		await self.update_if_necessary()
+		if await self.update_if_necessary():
+			self.waiting_for_update = True
 		self.join_event.set()
 
 	async def handle_delta_push(self, msg: DeltaPush):
@@ -257,6 +268,7 @@ class FederatedLearningClient:
 			raise InvalidStateException()
 		self.apply_delta(msg.delta.diff)
 		self.global_rev = msg.delta.rev_b
+		self.global_weights = Weights(self.model) * 1.0
 		self.local_rev = msg.delta.rev_b
 
 		self.logger.debug("local_rev now %d", self.local_rev)

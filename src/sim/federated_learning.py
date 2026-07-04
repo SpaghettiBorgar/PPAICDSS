@@ -16,8 +16,8 @@ from training.xray import xray_data, xray_training
 from training.xray.xray_data import XrayDataset
 from training.xray.xray_params import XrayParams, PHASES as XRAY_PHASES
 from util.timer import Timer
-from util.utils import random_partitions, auto_type
 from util.utils import dirichlet_partitions, auto_type
+from util.weights import Weights
 import warnings
 import re
 warnings.filterwarnings("ignore", category=UserWarning, message=r"Full backward hook is firing .*")
@@ -87,6 +87,7 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 
 	hospitals = create_participants(num_participants, devices=devices, seed=seed)
 	aggregator = Aggregator()
+	gvars.aggregator = aggregator
 	inprocess_address_space['aggregator'] = aggregator
 	total_time = 0
 
@@ -103,6 +104,9 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 			logger.info("Aggregator started")
 			initialize_participants(hospitals, aggregator, phase=phase, seed=seed, **params)
 			logger.info("Clients initialized")
+			model0 = hospitals[0].fl_projects['cxr'].model
+			aggregator.weight_deltas[-1] = Weights(model0) * 0.0
+			aggregator.weight_deltas[0] = Weights(model0) * 1.0
 			await setup_federation(hospitals)
 			logger.info("Federation set up")
 		else:
@@ -129,10 +133,15 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 			with timer:
 				await aggregator.start_new_round()
 				await aggregator.round_end_event.wait()
+			await asyncio.sleep(1)
+			await asyncio.sleep(1)
 			logger.info(f"Round done, took {timer.elapsed} seconds")
 			total_time += timer.elapsed
 
 			models = [hosp.fl_projects['cxr'].model for hosp in hospitals]
+
+			# assert all((Weights(models[0].cpu()) == Weights(m.cpu()) for m in models)), "Models are not synchronized after round" # side effects
+
 			logs['time'].append([hosp.fl_projects['cxr'].training_times for hosp in hospitals])
 			logs['loss'].append([hosp.fl_projects['cxr'].training_losses for hosp in hospitals])
 			try:

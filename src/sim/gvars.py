@@ -9,3 +9,4 @@ fl_params = SimpleNamespace(
 )
 
 fl_clients = {}
+aggregator = None
