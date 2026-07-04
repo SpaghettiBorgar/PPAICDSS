@@ -2,6 +2,7 @@
 name = "thesis"
 version = "0.1.0"
 description = "Code for bachelor thesis"
+authors = [{ name = "Colin Kubon" }]
 readme = "README.md"
 requires-python = "~=3.14.0"
 dependencies = [
@@ -15,7 +16,8 @@ dependencies = [
     "requests>=2.33.0",
     "sentencepiece>=0.2.0",
     "transformers>=5.5.0",
-    "tqdm>=4.68.0"
+    "tqdm>=4.68.0",
+    "scikit-learn>=1.9.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -23,8 +25,8 @@ where = ["src"]
 
 [project.optional-dependencies]
 cuda = [
-    "torch==2.11.0+cu126",
-    "torchvision==0.26.0+cu126"
+    "torch==2.11.0+cu128",
+    "torchvision==0.26.0+cu128"
 ]
 rocm = [
     "torch>=2.11.0",
@@ -64,5 +66,5 @@ explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu126"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
