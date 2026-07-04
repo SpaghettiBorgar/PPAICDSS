@@ -154,6 +154,71 @@ def random_partitions(
 		start = stop
 
 
+def dirichlet_partitions(
+    xs: range,
+    parts: int,
+    alpha: float = 1.0,
+    seed: int | None = None,
+) -> Iterable[range]:
+    """
+    Partition a range into contiguous random subranges.
+
+    Parameters
+    ----------
+    xs
+        Range to partition.
+    parts
+        Number of partitions.
+    alpha
+        Dirichlet concentration parameter.
+
+        Smaller values produce more uneven partitions.
+
+            alpha << 1    -> one or two large partitions
+            alpha = 1      -> unbiased random partition
+            alpha > 1      -> increasingly balanced
+            alpha -> inf   -> equal partition sizes
+
+    seed
+        Optional random seed.
+    """
+    if parts <= 0:
+        raise ValueError("parts must be positive")
+
+    if alpha <= 0:
+        raise ValueError("alpha must be positive")
+
+    rng = np.random.default_rng(seed)
+
+    n = len(xs)
+
+    if parts == 1:
+        yield xs
+        return
+
+    # Sample relative partition sizes.
+    proportions = rng.dirichlet(np.full(parts, alpha))
+
+    # Integer sizes using Hamilton (largest remainder) rounding.
+    exact = proportions * n
+    sizes = np.floor(exact).astype(int)
+
+    remaining = n - sizes.sum()
+
+    if remaining:
+        remainders = exact - sizes
+        order = np.argsort(remainders)[::-1]
+        sizes[order[:remaining]] += 1
+
+    start = xs.start
+    step = xs.step
+
+    for size in sizes:
+        stop = start + size * step
+        yield range(start, stop, step)
+        start = stop
+
+
 def chunk_with_min_remainder(seq, n, n_min=1):
 	seq = list(seq)
 	if n <= 0 or n_min <= 0 or n_min > n:

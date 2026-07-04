@@ -17,6 +17,7 @@ from training.xray.xray_data import XrayDataset
 from training.xray.xray_params import XrayParams, PHASES as XRAY_PHASES
 from util.timer import Timer
 from util.utils import random_partitions, auto_type
+from util.utils import dirichlet_partitions, auto_type
 import warnings
 import re
 warnings.filterwarnings("ignore", category=UserWarning, message=r"Full backward hook is firing .*")
@@ -30,7 +31,7 @@ logging.getLogger("opacus.validators.module_validator").setLevel("WARNING")
 
 def create_participants(num_hospitals: int, seed: int = 0, devices=None) -> List[Hospital]:
 	hospitals = []
-	partitions = list(random_partitions(range(xray_data.TRAIN_SIZE), num_hospitals, seed=seed, evenness=0.8))
+	partitions = list(dirichlet_partitions(range(xray_data.TRAIN_SIZE), num_hospitals, alpha=gvars.fl_params.dirichlet_alpha, seed=seed))
 	logger.info(f"Hospital dataset partitions: {partitions}")
 	for i, p in enumerate(partitions):
 		hosp = Hospital(f"Hospital {i}", device=devices[i % len(devices)] if devices is not None else "cuda")
