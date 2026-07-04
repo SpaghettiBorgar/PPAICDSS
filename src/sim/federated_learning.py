@@ -11,7 +11,7 @@ from sim.aggregator import Aggregator
 from sim.fl_client import FederatedLearningClient
 from sim.hospital import Hospital
 from sim.transport import InProcessTransport, inprocess_address_space
-from training import training
+from training import trainer
 from training.xray import xray_data, xray_training
 from training.xray.xray_data import XrayDataset
 from training.xray.xray_params import XrayParams, PHASES as XRAY_PHASES
@@ -135,7 +135,7 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 			logs['time'].append([hosp.fl_projects['cxr'].training_times for hosp in hospitals])
 			logs['loss'].append([hosp.fl_projects['cxr'].training_losses for hosp in hospitals])
 			try:
-				acc = training.test(models[0], test_params, test_loader)
+				acc = trainer.test(models[0], test_params, test_loader)
 				logger.info(f"Model acc: {acc}")
 				logs['acc'].append(acc)
 			except Exception as e:
@@ -152,7 +152,7 @@ async def run_simulation(num_participants=3, phases=['testing'], checkpoint=None
 			save_params.update(
 				phase=f"fl_{phase}",
 				argv=sys.argv)
-			training.save(models[0], save_params, logs)
+			trainer.save(models[0], save_params, logs)
 			logger.debug("Saving model done")
 		except Exception:
 			logger.error("Exception occured during saving")
@@ -177,8 +177,8 @@ def parse_args():
 	parser.add_argument("--epochs-per-round", "-r", type=int, default=2, help="Number of epochs per round")
 	parser.add_argument("--phase", "-p", action='append', type=str, default=[], help="Training phases for parameter presets")
 	parser.add_argument("--checkpoint", "-c", type=str, default=None, help="Model checkpoint to load")
-	parser.add_argument("--save-path", "-o", type=str, default=training.save_model_path, help="Path template for checkpoint output")
-	parser.add_argument("--logs-path", type=str, default=training.save_logs_path, help="Path template for logs output")
+	parser.add_argument("--save-path", "-o", type=str, default=trainer.save_model_path, help="Path template for checkpoint output")
+	parser.add_argument("--logs-path", type=str, default=trainer.save_logs_path, help="Path template for logs output")
 	parser.add_argument("--devices", "-d", action='append', type=str, default=None, help="Devices to use for participants (default: all available GPUs)")
 	parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
 	parser.add_argument("--use-smpc", type=lambda x: x.lower() in ['true', 'yes'], choices=[True, False], default=True, help="Use SMPC for secure aggregation")
@@ -189,8 +189,8 @@ def parse_args():
 
 def main():
 	args = parse_args()
-	training.save_model_path = args.save_path
-	training.save_logs_path = args.logs_path
+	trainer.save_model_path = args.save_path
+	trainer.save_logs_path = args.logs_path
 	gvars.fl_params.use_smpc = args.use_smpc
 	gvars.fl_params.epochs_per_round = args.epochs_per_round
 	gvars.fl_params.round_timeout = args.round_timeout

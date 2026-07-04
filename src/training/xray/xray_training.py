@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader, Dataset
 import data_prep
 import training.xray.xray_data as xray_data
 from models.xray_cnn import *
-from training import training
+from training import trainer
 from training.params import Params
 from training.xray.xray_params import XrayParams
 from util.sampler import BlockShuffleBatchSampler
@@ -49,6 +49,7 @@ def train_xray_model(phase, checkpoint, device, **extra_params):
 
 	training_data = xray_data.XrayDataset(img_root, offset=0, size=xray_data.TRAIN_SIZE, transform=transform)
 	testing_data = xray_data.XrayDataset(img_root, offset=xray_data.TEST_OFFSET, size=0, transform=transform)
+	print(f"Training data size: {len(training_data)}, Testing data size: {len(testing_data)}")
 
 	params.sampler = BlockShuffleBatchSampler(
 		len(training_data), data_prep.chunk_size, block_size=data_prep.chunk_size // 4, batch_size=params.batch_size)
@@ -65,6 +66,6 @@ def train_xray_model(phase, checkpoint, device, **extra_params):
 	params._model, params._optimizer, train_dataloader = make_private_auto(params._model, params._optimizer, train_dataloader, params)
 
 	try:
-		training.run(params._model, params, train_dataloader, test_dataloader)
+		trainer.run(params._model, params, train_dataloader, test_dataloader)
 	finally:
 		xray_data.shutdown_shm()

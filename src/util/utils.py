@@ -4,6 +4,8 @@ import hashlib
 import random
 from collections.abc import Iterable
 from typing import Any, Iterator, Union, Sequence
+from torch.utils.data._utils.collate import default_collate
+from torch.utils.data import DataLoader
 
 import numpy as np
 
@@ -189,3 +191,18 @@ def resilient_iter(it: Iterator):
 		except Exception as e:
 			print(f"Skipping item due to error: {e}")
 			continue
+
+def tuple_preserving_collate(batch):
+	return _lists_to_tuples(default_collate(batch))	
+
+
+def _lists_to_tuples(x):
+	if isinstance(x, list):
+		return tuple(_lists_to_tuples(v) for v in x)
+	if isinstance(x, dict):
+		return {k: _lists_to_tuples(v) for k, v in x.items()}
+	return x
+
+def fix_collate(data_loader: DataLoader):
+	if data_loader.collate_fn == default_collate:
+		data_loader.collate_fn = tuple_preserving_collate

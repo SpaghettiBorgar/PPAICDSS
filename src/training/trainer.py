@@ -3,32 +3,15 @@ import time
 from datetime import datetime
 from typing import TypeAlias, Callable, Any
 
+from opacus.validators import ModuleValidator
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.utils.data._utils.collate import default_collate
 
-from util.dp_compat import make_model_dp_compatible
 from training.params import Params
+from util.dp_compat import make_model_dp_compatible, fix_inplace
 from util.mapping import tree_map
-from util.utils import resilient_iter
-
-
-def tuple_preserving_collate(batch):
-	return _lists_to_tuples(default_collate(batch))	
-
-
-def _lists_to_tuples(x):
-	if isinstance(x, list):
-		return tuple(_lists_to_tuples(v) for v in x)
-	if isinstance(x, dict):
-		return {k: _lists_to_tuples(v) for k, v in x.items()}
-	return x
-
-
-def fix_collate(data_loader: DataLoader):
-	if data_loader.collate_fn == default_collate:
-		data_loader.collate_fn = tuple_preserving_collate
+from util.utils import resilient_iter, fix_collate
 
 
 def train(model: torch.nn.Module, params: Params, train_loader: DataLoader, epoch):
@@ -37,7 +20,10 @@ def train(model: torch.nn.Module, params: Params, train_loader: DataLoader, epoc
 	losses = []
 
 	# if params.grad_norm is not None and params.noise_mult is not None:
-	make_model_dp_compatible(model)
+	# print("using make_model_dp_compatible with swap_blocks=True")
+	# make_model_dp_compatible(model, swap_blocks=False)
+	# print("using fix_inplace")
+
 
 	optimizer = params.get_optimizer()
 	criterion = params.get_criterion()
@@ -147,8 +133,8 @@ def save(model=None, params=None, logs=None, model_path=None, logs_path=None):
 	print("save() done")
 
 
-do_save = lambda: None
-
+save_model = lambda: None
+save_logs = lambda: None
 
 def run(model: torch.nn.Module, params: Params, train_dataloader: DataLoader, test_dataloader: DataLoader):
 	print(params)
@@ -157,8 +143,9 @@ def run(model: torch.nn.Module, params: Params, train_dataloader: DataLoader, te
 	acc_history = []
 
 	logs = {'loss': loss_history, 'time': time_history, 'acc': acc_history}
-	global do_save
-	do_save = lambda: save(model=model, params=params, logs=logs)
+	global save_model, save_logs
+	save_model = lambda: save(model=model, params=params, logs=None)
+	save_logs = lambda: save(model=None, params=params, logs=logs)
 
 	for epoch in range(0, params.epochs):
 		print(f"Begin epoch {epoch}")
@@ -178,5 +165,5 @@ def run(model: torch.nn.Module, params: Params, train_dataloader: DataLoader, te
 			save(model=model, params=params)
 
 	if params.save:
-		do_save()
+		save(model=model, params=params, logs=logs)
 0

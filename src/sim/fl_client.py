@@ -10,7 +10,7 @@ import torch.nn
 import sim.gvars as gvars
 from sim.messages import *
 from sim.transport import InProcessTransportSocket, TransportSocket
-from training import training
+from training import trainer
 from training.params import Params
 from training.xray import xray_training
 from util import smpc
@@ -144,7 +144,7 @@ class FederatedLearningClient:
 			epoch += self.trained_epochs
 			self.logger.debug(" Training epoch %d", epoch)
 			start_time = time.time()
-			self.training_losses.append(training.train(self.model, params | dict(epochs=gvars.fl_params.epochs_per_round), self.data_loader, epoch=epoch))
+			self.training_losses.append(trainer.train(self.model, params | dict(epochs=gvars.fl_params.epochs_per_round), self.data_loader, epoch=epoch))
 			self.training_times.append(time.time() - start_time)
 			self.trained_epochs += 1
 
