@@ -24,7 +24,11 @@ DEFAULT_PARAMS = dict(
 	grad_norm=None,
 	target_epsilon=None,
 	target_delta=None,
-	log_prefix=""
+	log_prefix="",
+	skip_test=False,
+	sgd_momentum=0.,
+	profile=False,
+	poisson_sampling=False,
 )
 
 
@@ -49,6 +53,10 @@ class Params:
 	target_delta: float | None
 	privacy_engine: PrivacyEngine | None
 	log_prefix: str
+	skip_test: bool
+	sgd_momentum: float
+	profile: bool
+	poisson_sampling: bool
 
 	def __init__(self, **kwargs):
 		self._weights = None

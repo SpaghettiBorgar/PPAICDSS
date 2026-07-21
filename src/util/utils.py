@@ -4,14 +4,17 @@ import hashlib
 import random
 from collections.abc import Iterable
 from typing import Any, Iterator, Union, Sequence
-from torch.utils.data._utils.collate import default_collate
-from torch.utils.data import DataLoader
 
 import numpy as np
+import torch
+from torch.utils.data import DataLoader
+from torch.utils.data._utils.collate import default_collate
 
 
-def auto_type(val):
+def auto_type(val, key=None):
 	from ast import literal_eval
+	if key == "optimizer":
+		return getattr(torch.optim, val)
 	try:
 		return literal_eval(val)
 	except:
@@ -155,68 +158,68 @@ def random_partitions(
 
 
 def dirichlet_partitions(
-    xs: range,
-    parts: int,
-    alpha: float = 1.0,
-    seed: int | None = None,
+		xs: range,
+		parts: int,
+		alpha: float = 1.0,
+		seed: int | None = None,
 ) -> Iterable[range]:
-    """
-    Partition a range into contiguous random subranges.
+	"""
+	Partition a range into contiguous random subranges.
 
-    Parameters
-    ----------
-    xs
-        Range to partition.
-    parts
-        Number of partitions.
-    alpha
-        Dirichlet concentration parameter.
+	Parameters
+	----------
+	xs
+		Range to partition.
+	parts
+		Number of partitions.
+	alpha
+		Dirichlet concentration parameter.
 
-        Smaller values produce more uneven partitions.
+		Smaller values produce more uneven partitions.
 
-            alpha << 1    -> one or two large partitions
-            alpha = 1      -> unbiased random partition
-            alpha > 1      -> increasingly balanced
-            alpha -> inf   -> equal partition sizes
+			alpha << 1    -> one or two large partitions
+			alpha = 1      -> unbiased random partition
+			alpha > 1      -> increasingly balanced
+			alpha -> inf   -> equal partition sizes
 
-    seed
-        Optional random seed.
-    """
-    if parts <= 0:
-        raise ValueError("parts must be positive")
+	seed
+		Optional random seed.
+	"""
+	if parts <= 0:
+		raise ValueError("parts must be positive")
 
-    if alpha <= 0:
-        raise ValueError("alpha must be positive")
+	if alpha <= 0:
+		raise ValueError("alpha must be positive")
 
-    rng = np.random.default_rng(seed)
+	rng = np.random.default_rng(seed)
 
-    n = len(xs)
+	n = len(xs)
 
-    if parts == 1:
-        yield xs
-        return
+	if parts == 1:
+		yield xs
+		return
 
-    # Sample relative partition sizes.
-    proportions = rng.dirichlet(np.full(parts, alpha))
+	# Sample relative partition sizes.
+	proportions = rng.dirichlet(np.full(parts, alpha))
 
-    # Integer sizes using Hamilton (largest remainder) rounding.
-    exact = proportions * n
-    sizes = np.floor(exact).astype(int)
+	# Integer sizes using Hamilton (largest remainder) rounding.
+	exact = proportions * n
+	sizes = np.floor(exact).astype(int)
 
-    remaining = n - sizes.sum()
+	remaining = n - sizes.sum()
 
-    if remaining:
-        remainders = exact - sizes
-        order = np.argsort(remainders)[::-1]
-        sizes[order[:remaining]] += 1
+	if remaining:
+		remainders = exact - sizes
+		order = np.argsort(remainders)[::-1]
+		sizes[order[:remaining]] += 1
 
-    start = xs.start
-    step = xs.step
+	start = xs.start
+	step = xs.step
 
-    for size in sizes:
-        stop = start + size * step
-        yield range(start, stop, step)
-        start = stop
+	for size in sizes:
+		stop = start + size * step
+		yield range(start, stop, step)
+		start = stop
 
 
 def chunk_with_min_remainder(seq, n, n_min=1):
@@ -247,6 +250,7 @@ def chunk_with_min_remainder(seq, n, n_min=1):
 
 	return chunks
 
+
 def resilient_iter(it: Iterator):
 	while True:
 		try:
@@ -254,11 +258,13 @@ def resilient_iter(it: Iterator):
 		except StopIteration:
 			return
 		except Exception as e:
-			print(f"Skipping item due to error: {e}")
+			if e != "Pin memory thread exited unexpectedly":
+				print(f"Skipping item due to error: {e}")
 			continue
 
+
 def tuple_preserving_collate(batch):
-	return _lists_to_tuples(default_collate(batch))	
+	return _lists_to_tuples(default_collate(batch))
 
 
 def _lists_to_tuples(x):
@@ -267,6 +273,7 @@ def _lists_to_tuples(x):
 	if isinstance(x, dict):
 		return {k: _lists_to_tuples(v) for k, v in x.items()}
 	return x
+
 
 def fix_collate(data_loader: DataLoader):
 	if data_loader.collate_fn == default_collate:

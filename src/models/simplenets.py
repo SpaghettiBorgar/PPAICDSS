@@ -1,5 +1,6 @@
-from torch import nn as nn
 import torch.nn.functional as F
+from torch import nn as nn
+
 
 class SimpleNet(nn.Module):
 	def __init__(self, resolution=32, num_classes=14):
@@ -82,8 +83,8 @@ class SampleConvNet(nn.Module):
 		self.conv1 = nn.Conv2d(1, 16, 8, 2, padding=3)
 		self.conv2 = nn.Conv2d(16, 32, 4, 2)
 		self._flattened_n = ((((resolution - 2) // 2 - 1) - 4) // 2)
-		self.fc1 = nn.Linear(32 * self._flattened_n ** 2, 22+num_classes)
-		self.fc2 = nn.Linear(22+num_classes, num_classes)
+		self.fc1 = nn.Linear(32 * self._flattened_n ** 2, 22 + num_classes)
+		self.fc2 = nn.Linear(22 + num_classes, num_classes)
 
 	def forward(self, x):
 		# x of shape [B, 1, 28, 28]
@@ -98,4 +99,3 @@ class SampleConvNet(nn.Module):
 
 	def name(self):
 		return "SampleConvNet"
-

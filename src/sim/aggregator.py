@@ -9,11 +9,10 @@ import sim.gvars as gvars
 from sim.messages import *
 from sim.time import get_time
 from sim.transport import TransportSocket
-from util import smpc
+from util import smpc, aio
 from util.utils import chunk_with_min_remainder
 
 logger = logging.getLogger("Aggregator")
-
 
 
 class AggregationException(Exception):
@@ -58,6 +57,7 @@ class Aggregator:
 	smpc_groups: List[List[ClientID]]
 	smpc_key_shares: dict[ClientID, KeyShare]
 	ending_round: bool
+	aggregating: bool
 
 	def __init__(self):
 		self.clients = {}
@@ -70,6 +70,7 @@ class Aggregator:
 		self.round_end_event = asyncio.Event()
 		self.round_deadline_task = None
 		self.ending_round = False
+		self.aggregating = False
 
 	def start(self):
 		self.loop_task = asyncio.create_task(self.loop())
@@ -97,7 +98,10 @@ class Aggregator:
 		while True:
 			msg = await sock.recv()
 			logger.debug("Received from %s: %s" % (self.connections.get(sock), msg))
-			await self.handle_message(msg, sock)
+			try:
+				await self.handle_message(msg, sock)
+			except Exception:
+				logger.exception(f"Error handling {type(msg).__name__} from {self.connections.get(sock)}; message dropped, still listening")
 
 	async def handle_message(self, msg: Message, src: TransportSocket):
 		if src in self.connections:
@@ -133,6 +137,7 @@ class Aggregator:
 		if req.rev_b == 0:
 			req.rev_b = self.global_model_rev
 		state.socket.send(DeltaPush(WeightsDelta(req.rev_a, req.rev_b, self.build_delta(req.rev_a, req.rev_b))))
+		state.model_rev = req.rev_b
 
 	async def handle_delta_push(self, req: DeltaPush, client: ClientID):
 		self.clients[client].model_rev = req.delta.rev_b
@@ -162,7 +167,7 @@ class Aggregator:
 		if self.round_deadline_task is not None:
 			self.round_deadline_task.cancel()
 			self.round_deadline_task = None
-		asyncio.create_task(self.end_round())
+		aio.spawn(self.end_round(), logger=logger, name="end_round")
 
 	async def watch_round_deadline(self, round_id: int, deadline: Timestamp):
 		try:
@@ -185,45 +190,76 @@ class Aggregator:
 		logger.info("Surviving clients: %s", surviving_clients)
 		self.smpc_groups = chunk_with_min_remainder(surviving_clients, n=3, n_min=2)
 		logger.info("Starting key phase with groups %s", self.smpc_groups)
+		if not self.smpc_groups:
+			# no shares will ever arrive, so nothing would trigger aggregate()
+			await self.aggregate()
+			return
 		for group in self.smpc_groups:
 			for client_id in group:
 				self.clients[client_id].socket.send(KeyPhaseAnnounce(group=group))
+		aio.spawn(self.watch_key_phase(self.current_round.round_id), logger=logger, name="key phase watchdog")
+
+	async def watch_key_phase(self, round_id: int):
+		try:
+			await asyncio.wait_for(self.round_end_event.wait(), timeout=gvars.fl_params.key_phase_timeout)
+		except TimeoutError:
+			if self.current_round is not None and self.current_round.round_id == round_id:
+				logger.warning("Key phase timed out, aggregating with available shares")
+				await self.aggregate()
 
 	async def handle_smpc_key_share(self, msg: SMPCKeyShare, client_id):
-		group = next(g for g in self.smpc_groups if client_id in g)
+		if not any(client_id in g for g in self.smpc_groups):
+			logger.warning("Ignoring key share from %s: not in any group", client_id)
+			return
 		self.smpc_key_shares[client_id] = msg.key_share
 		if len(self.smpc_key_shares) == sum(len(g) for g in self.smpc_groups):
-			asyncio.create_task(self.aggregate())
+			aio.spawn(self.aggregate(), logger=logger, name="aggregate")
 
 	async def aggregate(self):
+		if self.aggregating:
+			return
+		self.aggregating = True
 		assert self.current_round is not None
 		logger.info(f"Aggregating {len(self.current_round_deltas)} deltas")
-		if gvars.fl_params.use_smpc:
-			deltas = []
-			for group in self.smpc_groups:
-				try:
-					group_key = sum(self.smpc_key_shares[c_id] for c_id in group) % smpc.MOD
-					group_deltas = smpc.decrypt(sum([self.current_round_deltas[c_id] for c_id in group]) % smpc.MOD, group_key)
-					deltas.append(smpc.recover_sign(group_deltas))
-				except KeyError:
-					logger.warning("Not all key shares received for group %s, skipping", group)
-			deltas = [smpc.unquantize(group_delta) for group_delta in deltas]
-			logger.info(f"Successfully recovered {len(deltas)} out of {len(self.smpc_groups)} group deltas")
-		else:
-			deltas = list(self.current_round_deltas.values())
-
+		msg = None
 		try:
+			if gvars.fl_params.use_smpc:
+				deltas = []
+				recovered = 0
+				for group in self.smpc_groups:
+					try:
+						group_key = sum(self.smpc_key_shares[c_id] for c_id in group) % smpc.MOD
+						group_sum = smpc.decrypt(sum([self.current_round_deltas[c_id] for c_id in group]) % smpc.MOD, group_key)
+						# decoding yields the SUM over group members; spread the group mean over
+						# len(group) entries so FedAvg over entries equals per-client averaging
+						group_mean = smpc.unquantize(smpc.recover_sign(group_sum)) / len(group)
+						deltas.extend([group_mean] * len(group))
+						recovered += 1
+					except KeyError:
+						logger.warning("Not all key shares received for group %s, skipping", group)
+				logger.info(f"Successfully recovered {recovered} out of {len(self.smpc_groups)} group deltas")
+			else:
+				deltas = list(self.current_round_deltas.values())
+
 			if len(deltas) == 0:
 				raise AggregationException("No deltas available for aggregation")
 			aggregate = self.aggregation_strategy.aggregate_deltas(deltas)
-			assert self.current_round is not None
+			agg_vec = aggregate.flatten()[0] if isinstance(aggregate, Weights) else aggregate
+			logger.debug(f"aggregate norm={np.linalg.norm(agg_vec)} range={agg_vec.min()}_{agg_vec.max()} mean={agg_vec.mean()} std={agg_vec.std()}")
 			msg = RoundEnd(round=self.current_round, success=True,
 			               delta=WeightsDelta(rev_a=self.current_round.rev_a, rev_b=self.current_round.rev_b, diff=aggregate))
 			self.weight_deltas[self.current_round.rev_b] = aggregate
+			# memory optimization: drop per-round deltas that every client has advanced past
+			# (but always keep the last two; build_delta raises if a catch-up needs a pruned rev)
+			min_rev = min((state.model_rev for state in self.clients.values()), default=self.current_round.rev_b)
+			for old_rev in [rev for rev in self.weight_deltas if rev < min(min_rev, self.current_round.rev_b - 1)]:
+				del self.weight_deltas[old_rev]
 			self.global_model_rev = self.current_round.rev_b
-		except AggregationException as e:
-			msg = RoundEnd(round=self.current_round, success=False, delta=None)
+		except Exception:
+			logger.exception("Aggregation failed, declaring round failed")
 		finally:
+			if msg is None:
+				msg = RoundEnd(round=self.current_round, success=False, delta=None)
 			for client_state in self.clients.values():
 				client_state.socket.send(msg)
 			if self.round_deadline_task is not None:
@@ -232,13 +268,21 @@ class Aggregator:
 			self.round_end_event.set()
 
 	async def end_round(self):
-		if gvars.fl_params.use_smpc:
-			await self.start_key_phase()
-		else:
-			await self.aggregate()
+		try:
+			if gvars.fl_params.use_smpc:
+				await self.start_key_phase()
+			else:
+				await self.aggregate()
+		except Exception:
+			logger.exception("end_round failed, declaring round failed")
+			await self.aggregate()  # no-op if aggregation already ran; otherwise fails the round and releases waiters
 
 	def build_delta(self, rev_a: ModelRev, rev_b: ModelRev):
-		return sum_((self.weight_deltas[d] for d in self.weight_deltas if rev_a < d <= rev_b))
+		revs = [d for d in self.weight_deltas if rev_a < d <= rev_b]
+		if len(revs) != rev_b - rev_a:
+			raise InvalidStateException(
+				f"Cannot build delta {rev_a}->{rev_b}: missing revisions, have {sorted(self.weight_deltas)}")
+		return sum_((self.weight_deltas[d] for d in revs))
 
 	async def start_new_round(self):
 		if len(self.clients) == 0:
@@ -250,6 +294,7 @@ class Aggregator:
 			self.round_deadline_task = None
 		self.round_end_event.clear()
 		self.ending_round = False
+		self.aggregating = False
 		self.current_round = Round(
 			round_id=(self.current_round.round_id if self.current_round is not None else 0) + 1,
 			rev_a=self.global_model_rev,
@@ -265,6 +310,6 @@ class Aggregator:
 	def connect(self, sock: TransportSocket):
 		logger.debug("Aggregator connected to %s", sock)
 		self.connections[sock] = None
-		task = asyncio.create_task(self._listen(sock))
+		task = aio.spawn(self._listen(sock), logger=logger, name="aggregator listen")
 		self.listeners.add(task)
 		task.add_done_callback(self.listeners.discard)

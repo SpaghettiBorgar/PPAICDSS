@@ -3,9 +3,9 @@ import numpy as np
 KEY_LEN = 2048
 DTYPE = np.uint32
 QUANT_DTYPE = np.int16
-QUANT_MIN = - 2 ** 15
-QUANT_MAX = + 2 ** 15
-MOD = 2147483647
+QUANT_MIN = - 2 ** 15 + 1
+QUANT_MAX = + 2 ** 15 - 1
+MOD = 2 ** 31 - 1
 
 rng = np.random.default_rng(0)
 
@@ -32,7 +32,8 @@ def normalize(vec):
 		raise ValueError("Trying to normalize zero-vector")
 	return vec / norm
 
-def clip(vec, max_norm=200, max_range=1.0):
+
+def clip(vec, max_norm, max_range=1.0):
 	norm = np.linalg.norm(vec)
 	if norm == 0:
 		raise ValueError("Trying to clip zero-vector")
@@ -40,8 +41,9 @@ def clip(vec, max_norm=200, max_range=1.0):
 		vec = vec * max_norm / norm
 	return np.clip(vec, -max_range, max_range)
 
+
 def quantize(vec):
-	return np.round(np.clip(vec * QUANT_MAX, QUANT_MIN, QUANT_MAX)).astype(QUANT_DTYPE)
+	return np.clip(np.round(vec * QUANT_MAX), QUANT_MIN, QUANT_MAX).astype(QUANT_DTYPE)
 
 
 def unquantize(vec):

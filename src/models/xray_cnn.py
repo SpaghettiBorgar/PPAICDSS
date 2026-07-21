@@ -5,13 +5,16 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 import torchvision.models as models
-from opacus.validators import ModuleValidator
 
-from util.dp_compat import make_model_dp_compatible, convert_dp_state_dict
+from util.dp_compat import convert_dp_state_dict
 
 data_dir = os.getenv("TRAIN_DATA_DIR", default="./data")
 img_root = f"{data_dir}/images"
 checkpoints_dir = "./checkpoints/xray_resnet"
+
+# ResNet backend pretrained norm
+NORM_MEAN = (0.485 + 0.456 + 0.406) / 3
+NORM_STD = (0.229 + 0.224 + 0.225) / 3
 
 
 def get_latest_checkpoint(checkpoints_dir=checkpoints_dir, filter: Callable[[str], bool] = lambda f: not f.startswith("fl")) -> str:
@@ -55,14 +58,13 @@ class XrayModel(nn.Module):
 			nn.Linear(256, num_classes)
 		)
 
-		# Make compatible with opacus DP
-		# self.backend = ModuleValidator.fix(self.backend)
-		# self.classifier = ModuleValidator.fix(self.classifier)
-		# self.make_private_compatible()
-
+	# Make compatible with opacus DP
+	# self.backend = ModuleValidator.fix(self.backend)
+	# self.classifier = ModuleValidator.fix(self.classifier)
+	# self.make_private_compatible()
 
 	# def make_private_compatible(self):
-		# make_model_dp_compatible(self)
+	# make_model_dp_compatible(self)
 
 	@classmethod
 	def load_weights(cls, module, weights):
@@ -74,14 +76,13 @@ class XrayModel(nn.Module):
 				module.load_state_dict(convert_dp_state_dict(weights))
 		return module
 
-
 	def forward(self, x: Tuple[torch.Tensor, torch.Tensor] | torch.Tensor):
 		# for tuple input, make sure to fix the data loader with util.utils.fix_collate() to preserve tuples in batches
 		try:
 			x, xray_view = x
 		except Exception:
 			xray_view = torch.zeros((x.shape[0], self.xray_view_dim), device=x.device)
-		
+
 		x = self.backend(x)
 		xray_view = self.metanet(xray_view.to(x.dtype))
 

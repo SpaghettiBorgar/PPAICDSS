@@ -6,6 +6,7 @@ from typing import Callable, TypeAlias, List, override
 
 from sim import gvars
 from sim.messages import Message
+from util import aio
 
 ReceiveCallback: TypeAlias = Callable[[Message], None]
 
@@ -61,17 +62,13 @@ class InProcessTransportSocket(TransportSocket):
 class InProcessTransport:
 	endpoints: List[InProcessTransportSocket]
 	latency: float
-	_dispatch_tasks: set[asyncio.Task]
 
-	def __init__(self, latency=gvars.fl_params.latency):
+	def __init__(self, latency=None):
 		self.endpoints = []
-		self.latency = latency
-		self._dispatch_tasks = set()
+		self.latency = gvars.fl_params.latency if latency is None else latency
 
 	def put(self, msg: Message, source: InProcessTransportSocket):
-		task = asyncio.create_task(self._deliver(msg, source))
-		self._dispatch_tasks.add(task)
-		task.add_done_callback(self._dispatch_tasks.discard)
+		aio.spawn(self._deliver(msg, source), name="transport deliver")
 
 	async def _deliver(self, msg: Message, source: InProcessTransportSocket):
 		if self.latency:

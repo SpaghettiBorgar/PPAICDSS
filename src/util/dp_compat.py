@@ -1,4 +1,6 @@
+import collections
 import types
+import warnings
 
 import torch
 import torch.nn as nn
@@ -7,8 +9,9 @@ from torchvision.models.densenet import DenseNet
 from torchvision.models.resnet import BasicBlock, Bottleneck
 
 from training.params import Params
-import collections
-from util.weights import Weights
+
+warnings.filterwarnings("ignore", category=UserWarning, message=r"Secure RNG turned off.*")
+
 
 def _safe_basic_block_forward(self, x):
 	identity = x
@@ -61,7 +64,7 @@ def _safe_densenet_forward(self, x: torch.Tensor) -> torch.Tensor:
 	return out
 
 
-def make_model_dp_compatible(model: nn.Module, swap_blocks = True) -> nn.Module:
+def make_model_dp_compatible(model: nn.Module, swap_blocks=True) -> nn.Module:
 	for module in model.modules():
 		if isinstance(getattr(module, "inplace", None), bool):
 			module.inplace = False
@@ -74,6 +77,7 @@ def make_model_dp_compatible(model: nn.Module, swap_blocks = True) -> nn.Module:
 				module.forward = types.MethodType(_safe_densenet_forward, module)
 	return model
 
+
 import operator
 import torch.fx as fx
 
@@ -85,6 +89,7 @@ _INPLACE_OPS = {
 	operator.imul: operator.mul,
 	operator.itruediv: operator.truediv,
 }
+
 
 def fix_inplace(model: nn.Module) -> nn.Module:
 	"""Replace all in-place operations in ``model`` with out-of-place equivalents.
@@ -120,30 +125,66 @@ def fix_inplace(model: nn.Module) -> nn.Module:
 	gm.recompile()
 	return gm
 
+
+def convert_bn_to_gn(model: nn.Module, num_groups=1) -> nn.Module:
+	for parent in list(model.modules()):
+		for name, child in list(parent.named_children()):
+			if isinstance(child, nn.modules.batchnorm._BatchNorm):
+				setattr(parent, name, _fold_bn_into_gn(child, num_groups))
+	return model
+
+
+def _fold_bn_into_gn(bn: nn.modules.batchnorm._BatchNorm, num_groups: int) -> nn.GroupNorm:
+	C = bn.num_features
+	gn = nn.GroupNorm(num_groups, C, eps=bn.eps, affine=True)
+	mu, var = bn.running_mean, bn.running_var
+	if mu is None or var is None:
+		return gn.to(bn.weight.device) if bn.affine else gn
+	with torch.no_grad():
+		gamma = bn.weight if bn.affine else torch.ones_like(mu)
+		beta = bn.bias if bn.affine else torch.zeros_like(mu)
+		a = gamma / torch.sqrt(var + bn.eps)
+		d = beta - a * mu
+		mu_g = mu.view(num_groups, -1).mean(dim=1)
+		ex2_g = (var + mu * mu).view(num_groups, -1).mean(dim=1)
+		m = mu_g.repeat_interleave(C // num_groups)
+		s = torch.sqrt(ex2_g - mu_g * mu_g + bn.eps).repeat_interleave(C // num_groups)
+		gn = gn.to(mu.device)
+		gn.weight.copy_(a * s)
+		gn.bias.copy_(a * m + d)
+	return gn
+
+
 def check_dp_params(params: dict | Params):
 	params = params.__dict__
 
 	if not ((('target_epsilon' in params) == ('target_delta' in params) == ('grad_norm' in params)
-		) or (('grad_norm' in params) == ('noise_mult' in params)) and (('noise_mult' in params) != 'target_epsilon' in params)):
+			) or (('grad_norm' in params) == ('noise_mult' in params)) and (('noise_mult' in params) != 'target_epsilon' in params)):
 		raise ValueError("Invalid DP parameters: must specify either (target_epsilon, target_delta, grad_norm) or (grad_norm, noise_mult), but not both.")
 	return 'grad_norm' in params
+
 
 def make_private_auto(model, optimizer, data_loader, params):
 	from util.utils import fix_collate
 	fix_collate(data_loader)
 	check_dp_params(params)
 	if params.target_epsilon is not None and params.target_delta is not None and params.grad_norm is not None:
-		print(f"Applying DP with target epsilon {params.target_epsilon} and delta {params.target_delta}")
+		print(f"Applying DP with target epsilon {params.target_epsilon} and delta {params.target_delta}, max_grad_norm={params.grad_norm} (poisson_sampling={params.poisson_sampling}, epochs={params.epochs})")
 		model, optimizer, data_loader = params.privacy_engine.make_private_with_epsilon(
-			module=model, optimizer=optimizer, data_loader=data_loader, target_delta=params.target_delta, target_epsilon=params.target_epsilon, epochs=params.epochs, max_grad_norm=params.grad_norm)
+			module=model, optimizer=optimizer, data_loader=data_loader, target_delta=params.target_delta, target_epsilon=params.target_epsilon, epochs=params.epochs, max_grad_norm=params.grad_norm,
+			poisson_sampling=params.poisson_sampling)
+		print(f"Accountant chose noise multiplier {optimizer.noise_multiplier} "
+		      f"(absolute noise std per step: {optimizer.noise_multiplier * params.grad_norm})")
 	elif params.grad_norm is not None and params.noise_mult is not None:
-		print(f"Applying DP with noise multiplier {params.noise_mult} and grad norm {params.grad_norm}")
+		print(f"Applying DP with noise multiplier {params.noise_mult} and grad norm {params.grad_norm}, max_grad_norm={params.grad_norm} (poisson_sampling={params.poisson_sampling}, epochs={params.epochs})")
 		model, optimizer, data_loader = params.privacy_engine.make_private(
-			module=model, optimizer=optimizer, data_loader=data_loader, noise_multiplier=params.noise_mult, max_grad_norm=params.grad_norm)
+			module=model, optimizer=optimizer, data_loader=data_loader, noise_multiplier=params.noise_mult, max_grad_norm=params.grad_norm,
+			poisson_sampling=params.poisson_sampling)
 	else:
 		print("DP not enabled")
-	
+
 	return model, optimizer, data_loader
+
 
 def convert_dp_state_dict(weights: collections.OrderedDict):
 	return collections.OrderedDict((n.removeprefix("_module."), p) for n, p in weights.items())

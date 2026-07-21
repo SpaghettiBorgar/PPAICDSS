@@ -8,9 +8,10 @@ from typing import Any, Iterable
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 
-def vis_batch(t, nrow: int = None, ax=None):
+def vis_batch(t, nrow: int = None, ax=None, cmap='seismic'):
 	from torchvision.utils import make_grid
 	if nrow is None:
 		nrow = int(math.ceil(math.sqrt(t.shape[0])))
@@ -19,8 +20,9 @@ def vis_batch(t, nrow: int = None, ax=None):
 	else:
 		fig = ax.figure
 
-	img = make_grid(t, nrow=nrow).permute(1, 2, 0)
-	im = ax.imshow(img)
+	img = make_grid(t, nrow=nrow).permute(1, 2, 0).mean(dim=-1, keepdim=True, dtype=torch.float32)
+	print(img.shape)
+	im = ax.imshow(img, vmin=img.min().item(), vmax=img.max().item(), cmap=cmap)
 	fig.colorbar(im, ax=ax)
 
 	return fig, ax

@@ -32,7 +32,7 @@ def analyze_xray(img: Image.Image) -> dict[str, float]:
 	transform = v2.Compose([
 		v2.PILToTensor(),
 		v2.ToImage(),
-		v2.Resize(size=None, max_size=600, interpolation=InterpolationMode.BICUBIC),
+		v2.Resize(size=None, max_size=512, interpolation=InterpolationMode.BICUBIC),
 		v2.ToDtype(torch.float32, scale=True),
 	])
 	inp = transform(img).unsqueeze(0).to(params.device)

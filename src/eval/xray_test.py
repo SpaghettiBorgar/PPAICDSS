@@ -2,25 +2,33 @@ import argparse
 import math
 import os
 import signal
+import sys
 from itertools import batched
 
+import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from torchvision.transforms import v2, InterpolationMode
+from tqdm import tqdm
 
+import data_prep
 from models import xray_cnn
-from training.xray.xray_data import XrayDataset, LABELS_SHORT as LABELS
+from models.xray_cnn import NORM_MEAN, NORM_STD
+from training.xray.xray_data import XrayDataset, LABELS_SHORT as LABELS, TEST_OFFSET
 from training.xray.xray_params import XrayParams
+from util import numa
 from util.mapping import tree_map
 from util.utils import fix_collate
 
 
-def print_pair_table(A: torch.Tensor, B: torch.Tensor, indices=None, labels=LABELS, print_rows=True, print_stats=True):
+def print_pair_table(A: torch.Tensor, B: torch.Tensor, indices=None, labels=LABELS, print_rows=True, print_stats=True, file=sys.stdout):
 	try:
 		if not isinstance(A, torch.Tensor) or not isinstance(B, torch.Tensor):
 			raise TypeError("A and B must be torch tensors.")
 		if A.shape != B.shape or A.ndim != 2 or A.shape[1] != 14:
 			raise ValueError("A and B must both have shape (C, 14).")
+		if len(A) == 0:
+			raise ValueError("Can't use empty tensors.")
 		if len(indices) != A.shape[0]:
 			raise ValueError("indices must have length C.")
 		if len(labels) != 14:
@@ -48,7 +56,7 @@ def print_pair_table(A: torch.Tensor, B: torch.Tensor, indices=None, labels=LABE
 	header.append(f"{'p1':>{norm_w}}")
 	header.append(f"{'p2':>{norm_w}}")
 
-	print(" | ".join(header))
+	print(" | ".join(header), file=file)
 
 	if print_rows:
 		for i in range(len(A)):
@@ -65,7 +73,7 @@ def print_pair_table(A: torch.Tensor, B: torch.Tensor, indices=None, labels=LABE
 			row.append(f"{p1:>{norm_w}.4f}")
 			row.append(f"{p2:>{norm_w}.4f}")
 
-			print(" | ".join(row))
+			print(" | ".join(row), file=file)
 
 	if not print_stats:
 		return
@@ -100,6 +108,65 @@ def print_pair_table(A: torch.Tensor, B: torch.Tensor, indices=None, labels=LABE
 
 		print(" | ".join(row))
 
+	data["p1"] = p1.numpy()
+	data["p2"] = p2.numpy()
+
+	df_new = pd.DataFrame(data)
+
+	if os.path.exists(data_csv):
+		df_old = pd.read_csv(data_csv)
+		df_data = pd.concat([df_old, df_new], ignore_index=True)
+	else:
+		df_data = df_new
+
+	df_data.to_csv(data_csv, index=False)
+
+	# ------------------------------------------------------------
+	# Summary CSV
+	# Statistics are based on absolute difference |B - A|
+	# ------------------------------------------------------------
+	absdiff = torch.abs(diff)
+	p1_abs = torch.norm(absdiff, p=1, dim=1)
+	p2_abs = torch.norm(absdiff, p=2, dim=1)
+
+	start = indices[0]
+	end = indices[-1]
+	n_rows = len(indices)
+
+	stat_specs = [
+		("min", lambda x: torch.min(x, dim=0).values),
+		("max", lambda x: torch.max(x, dim=0).values),
+		("std", lambda x: torch.std(x, dim=0, unbiased=False)),
+		("avg", lambda x: torch.mean(x, dim=0)),
+	]
+
+	summary_rows = []
+	for stat_name, stat_fn in stat_specs:
+		row = {
+			"start": start,
+			"end": end,
+			"n_rows": n_rows,
+			"stat": stat_name,
+		}
+
+		vals = stat_fn(absdiff)
+		for j, lbl in enumerate(labels):
+			row[lbl] = vals[j].item()
+
+		row["p1"] = stat_fn(p1_abs).item()
+		row["p2"] = stat_fn(p2_abs).item()
+
+		summary_rows.append(row)
+
+	df_summary_new = pd.DataFrame(summary_rows)
+
+	if os.path.exists(summary_csv):
+		df_summary_old = pd.read_csv(summary_csv)
+		df_summary = pd.concat([df_summary_old, df_summary_new], ignore_index=True)
+	else:
+		df_summary = df_summary_new
+
+	df_summary.to_csv(summary_csv, index=False)
 
 
 def binary_auroc(targets: torch.Tensor, scores: torch.Tensor) -> tuple[float, int, int, int]:
@@ -195,23 +262,26 @@ def print_auroc_table(targets: torch.Tensor, outputs: torch.Tensor, labels=LABEL
 	print(f"Macro AUROC: {macro_str}")
 
 
-def test_xray_model(checkpoint, num_samples=64, print_samples: int | None = None, res: int | None = 600, crop: bool = True, device="cuda", offset=200000):
+def test_xray_model(checkpoint, num_samples=0, print_samples: int | None = None, res: int | None = 512, crop: bool = True, device="cuda", offset=TEST_OFFSET, normalize=True):
 	params = XrayParams(checkpoint=checkpoint, device=device)
-	print(f"Testing model {params.checkpoint}")
+	print(f"Testing model {params.checkpoint}", file=sys.stderr)
 	model = params.get_model()
 	transform = v2.Compose([
 		*([v2.Resize(size=None, max_size=res, interpolation=InterpolationMode.BICUBIC)] if res is not None else []),
 		v2.ToImage(),
 		v2.ToDtype(torch.float32, scale=True),
-		*([v2.CenterCrop([res, res])] if crop else [])
+		*([v2.CenterCrop([res, res])] if crop else []),
+		*([v2.Normalize(mean=[NORM_MEAN], std=[NORM_STD])] if normalize else [])
 	])
-	dataset = XrayDataset(offset=offset, use_chunks=False, transform=transform)
+	use_chunks = (res is not None and res <= data_prep.resolution and crop)
+	print(f"use_chunks={use_chunks}", file=sys.stderr)
+	dataset = XrayDataset(offset=offset, size=num_samples, use_chunks=use_chunks, transform=transform)
 
 	do_quit = False
 
 	def set_quit(*args):
 		nonlocal do_quit
-		print("Quitting")
+		print("Quitting", file=sys.stderr)
 		do_quit = True
 
 	signal.signal(signal.SIGINT, set_quit)
@@ -219,7 +289,6 @@ def test_xray_model(checkpoint, num_samples=64, print_samples: int | None = None
 
 	model.eval()
 	torch.set_grad_enabled(False)
-	n_samples = min(len(dataset), num_samples)
 
 	all_targets = torch.empty((0, len(LABELS)))
 	all_outputs = torch.empty((0, len(LABELS)))
@@ -230,15 +299,17 @@ def test_xray_model(checkpoint, num_samples=64, print_samples: int | None = None
 		targets, outputs = targets.cpu(), outputs.cpu()
 		rows_to_print = len(real_idxs) if print_samples is None else max(0, min(len(real_idxs), print_samples - printed_samples))
 		if rows_to_print > 0:
-			print()
-			print_pair_table(targets[:rows_to_print], outputs[:rows_to_print], real_idxs[:rows_to_print])
+			print(file=sys.stderr)
+			print_pair_table(targets[:rows_to_print], outputs[:rows_to_print], real_idxs[:rows_to_print], file=sys.stderr)
 			printed_samples += rows_to_print
 		all_targets, all_outputs = torch.cat((all_targets, targets.clone())), torch.cat((all_outputs, outputs.clone()))
 
-	if res is not None and crop:
-		loader = DataLoader(Subset(dataset, range(n_samples)), batch_size=16, shuffle=False)
+	if res is not None and crop and device != "cpu":
+		print(f"Using batches on device {device}")
+		loader = DataLoader(dataset, batch_size=16, shuffle=False,
+		                    num_workers=int(os.getenv("DATA_LOADER_WORKERS", "2")), worker_init_fn=numa.WorkerInit(device))
 		fix_collate(loader)
-		for batch_idx, (inp, targets) in enumerate(loader):
+		for batch_idx, (inp, targets) in tqdm(enumerate(loader), file=sys.stderr):
 			if do_quit:
 				break
 			inp, targets = tree_map(lambda t: t.to(device), (inp, targets))
@@ -247,8 +318,8 @@ def test_xray_model(checkpoint, num_samples=64, print_samples: int | None = None
 			real_idxs = [dataset.real_index(i) for i in range(start, start + len(targets))]
 			record_batch(targets, outputs, real_idxs)
 	else:
-		idxs = range(n_samples)
-		for idxs in batched(idxs, 16):
+		idxs = range(len(dataset))
+		for idxs in tqdm(batched(idxs, 16), file=sys.stderr):
 			if do_quit:
 				break
 			real_idxs = []
@@ -264,30 +335,38 @@ def test_xray_model(checkpoint, num_samples=64, print_samples: int | None = None
 				targets.append(target)
 				outputs.append(output)
 
-		targets, outputs = torch.cat(targets).cpu(), torch.cat(outputs).cpu()
-		print()
-		print_pair_table(targets, outputs, real_idxs)
-		all_targets, all_outputs = torch.cat((all_targets, targets.clone())), torch.cat((all_outputs, outputs.clone()))
+			targets, outputs = torch.cat(targets), torch.cat(outputs)
+			record_batch(targets, outputs, real_idxs)
 
+	print()
+	print(" ".join(sys.argv))
 	print()
 	print_pair_table(all_targets, all_outputs, print_rows=False)
 	print()
 	print_auroc_table(all_targets, all_outputs)
+	print()
 
 
 def parse_args():
 	parser = argparse.ArgumentParser(description="Train Xray Model")
 	parser.add_argument("--device", type=str, default="cuda", help="Device to use")
 	parser.add_argument("--checkpoint", "-c", type=str, default="latest", help="Model checkpoint to load")
-	parser.add_argument("--resolution", "-R", type=int, default=None, help="Max side length to scale images to")
+	parser.add_argument("--resolution", "-R", type=int, default=512, help="Max side length to scale images to")
 	parser.add_argument("--crop", "-C", type=lambda x: x.lower() in ['true', 'yes'], choices=[True, False], default=True, help="Crop/pad images to square")
-	parser.add_argument("--num-samples", "-N", type=int, default=20000, help="Number of samples to test")
+	parser.add_argument("--num-samples", "-N", type=int, default=0, help="Number of samples to test")
 	parser.add_argument("--print-samples", "-p", type=int, default=None, help="Number of tested samples to explicitly print")
-	parser.add_argument("--offset", "-O", type=int, default=200000, help="Sample index offset")
+	parser.add_argument("--offset", "-O", type=int, default=TEST_OFFSET, help="Sample index offset")
+	parser.add_argument("--normalize", type=lambda x: x.lower() in ['true', 'yes'], choices=[True, False], default=True, help="Normalize input images to resnet defaults")
 
 	return parser.parse_args()
 
 
 if __name__ == '__main__':
+	print(f"cpu_count = {os.cpu_count()}, sched_affinity = {os.sched_getaffinity(0)}", file=sys.stderr)
 	args = parse_args()
-	test_xray_model(args.checkpoint, num_samples=args.num_samples, print_samples=args.print_samples, res=args.resolution, crop=args.crop, device=args.device, offset=args.offset)
+	if local_cpus := numa.device_local_cpus(args.device):
+		# os.sched_setaffinity(0, local_cpus)
+		print(f"Affinity now {os.sched_getaffinity(0)}", file=sys.stderr)
+	print(f"interop_threads: {torch.get_num_interop_threads()}, num_threads: {torch.get_num_threads()}", file=sys.stderr)
+	# torch.set_num_interop_threads(1)
+	test_xray_model(args.checkpoint, num_samples=args.num_samples, print_samples=args.print_samples, res=args.resolution, crop=args.crop, device=args.device, offset=args.offset, normalize=args.normalize)

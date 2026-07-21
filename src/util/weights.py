@@ -32,7 +32,7 @@ class Weights(Iterable):
 		dev, dt = ps[0][1].device, ps[0][1].dtype
 		if any(p.device != dev or p.dtype != dt for _, p in ps):
 			raise ValueError("All parameters must share device and dtype to flatten")
-		return np.concatenate([p.cpu().numpy().reshape(-1) for _, p in ps]), shapes
+		return np.concatenate([p.detach().cpu().numpy().reshape(-1) for _, p in ps]), shapes
 
 	@classmethod
 	def unflatten(cls, vec: np.ndarray, shapes: List[tuple[str, tuple[int, ...]]]) -> 'Weights':

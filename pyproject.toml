@@ -18,6 +18,7 @@ dependencies = [
     "transformers>=5.5.0",
     "tqdm>=4.68.0",
     "scikit-learn>=1.9.0",
+    "scikit-image>=0.26.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -15,19 +15,20 @@ from typing import List, Callable, Any
 
 import torch
 import torch.nn as nn
-from opacus.accountants.utils import get_noise_multiplier
 from matplotlib.axes import Axes
 from matplotlib.gridspec import GridSpec, SubplotSpec
 from matplotlib.image import AxesImage
+from matplotlib.offsetbox import AnchoredText
 from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+from opacus.accountants.utils import get_noise_multiplier
+from skimage.metrics import structural_similarity as sk_ssim
 from torch import Tensor
 from torch.nn.functional import one_hot
 from torchvision.models.resnet import BasicBlock, Bottleneck
 from torchvision.utils import make_grid
-from matplotlib.offsetbox import AnchoredText
 
-from util.dp_compat import make_model_dp_compatible
 from models.simplenets import SimpleNet, LeNet1, LeNet3, SampleConvNet
+from util.dp_compat import make_model_dp_compatible
 from util.lazy import Lazy
 from util.mapping import tree_map
 
@@ -39,12 +40,20 @@ import torchvision
 from matplotlib.widgets import Slider
 from torchvision.transforms import v2, InterpolationMode
 
-from models.xray_cnn import XrayModel
+from models.xray_cnn import XrayModel, NORM_MEAN, NORM_STD
 from training.xray.xray_data import XrayDataset, DATA_DIR
 
 
-def resnet_wrapper(block, layers, num_classes=None, weights=None, **_):
+def resnet_wrapper(block, layers, num_classes=None, weights=None, monochrome=False, make_smooth=False, **_):
 	net = torchvision.models.resnet._resnet(block, layers, weights, progress=True)
+	if monochrome:
+		old_weights = net.conv1.weight.data
+		net.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+		net.conv1.weight.data = old_weights.mean(dim=1, keepdim=True)
+		net.monochrome = monochrome
+		if make_smooth:
+			net.conv1.stride = (1, 1)
+			net.relu = nn.SiLU(inplace=True)
 	if num_classes is not None:
 		net.fc = nn.Linear(net.fc.in_features, num_classes)
 	return net
@@ -59,18 +68,19 @@ def densenet_wrapper(factory, num_classes=None, weights=None, **_):
 
 OPTIMIZERS = {k: getattr(torch.optim, k) for k in torch.optim.__all__}
 MODELS = {
-		cls.__name__: cls for cls in
-		[SimpleNet, LeNet1, LeNet3, SampleConvNet, XrayModel]
-	} | {
-		name: functools.partial(resnet_wrapper, block, layers, weights=None)
-		for name, layers, block, weights in [
-		('ResNet0', [0, 0, 0, 0], BasicBlock, None),
-		('ResNet18', [2, 2, 2, 2], BasicBlock, torchvision.models.ResNet18_Weights.DEFAULT),
-		('ResNet34', [3, 4, 6, 3], BasicBlock, torchvision.models.ResNet34_Weights.DEFAULT),
-		('ResNet50', [3, 4, 6, 3], Bottleneck, torchvision.models.ResNet50_Weights.DEFAULT)
+			 cls.__name__: cls for cls in
+			 [SimpleNet, LeNet1, LeNet3, SampleConvNet, XrayModel]
+		 } | {
+			 name: functools.partial(resnet_wrapper, block, layers, weights=weights, monochrome=monochrome, make_smooth=make_smooth)
+			 for name, layers, block, weights, monochrome, make_smooth in [
+		('ResNet0', [0, 0, 0, 0], BasicBlock, None, False, True),
+		('ResNet0m', [0, 0, 0, 0], BasicBlock, None, True, True),
+		('ResNet18', [2, 2, 2, 2], BasicBlock, torchvision.models.ResNet18_Weights.DEFAULT, False, False),
+		('ResNet34', [3, 4, 6, 3], BasicBlock, torchvision.models.ResNet34_Weights.DEFAULT, False, False),
+		('ResNet50', [3, 4, 6, 3], Bottleneck, torchvision.models.ResNet50_Weights.DEFAULT, False, False)
 	]} | {
-		name: functools.partial(densenet_wrapper, factory, weights=None)
-		for name, factory, weights in [
+			 name: functools.partial(densenet_wrapper, factory, weights=None)
+			 for name, factory, weights in [
 		('DenseNet121', torchvision.models.densenet121, torchvision.models.DenseNet121_Weights.DEFAULT),
 		('DenseNet169', torchvision.models.densenet169, torchvision.models.DenseNet169_Weights.DEFAULT),
 		('DenseNet201', torchvision.models.densenet201, torchvision.models.DenseNet201_Weights.DEFAULT)
@@ -84,6 +94,36 @@ DATASETS = {
 
 def _process_img(img: Tensor):
 	return make_grid(img.detach(), nrow=1, normalize=True).permute(1, 2, 0).cpu().clone()
+
+
+def image_ssim(recovered: Tensor, target_processed) -> float | None:
+	"""Structural similarity between a recovered image and the (pre-processed) target.
+
+	Both are normalized to [0, 1] the same way they are displayed, so the score
+	matches what is shown in the figure. Returns None if SSIM cannot be computed.
+	"""
+	rec = _process_img(recovered).numpy()
+	tgt = target_processed
+	if rec.shape != tgt.shape:
+		return None
+	height, width = rec.shape[:2]
+	win = min(7, height, width)
+	if win < 3:
+		return None
+	if win % 2 == 0:
+		win -= 1
+	try:
+		if rec.ndim == 3 and rec.shape[-1] == 1:
+			return float(sk_ssim(rec[..., 0], tgt[..., 0], data_range=1.0, win_size=win))
+		return float(sk_ssim(rec, tgt, data_range=1.0, channel_axis=-1, win_size=win))
+	except ValueError:
+		return None
+
+
+def format_ssim_value(ssim: float | None):
+	if ssim is None or not math.isfinite(ssim):
+		return None
+	return f"{ssim:.3f}"
 
 
 def format_loss_value(loss: float | None):
@@ -105,7 +145,7 @@ def format_loss_tick(value, _pos):
 class ImgPlot:
 	gs: SubplotSpec
 	subgs: GridSpec
-	img_history: List[tuple[int, Tensor, float | None]]
+	img_history: List[tuple[int, Tensor, float | None, float | None]]
 	ax_img: Axes
 	ax_loss: Axes | None
 	ax_slider: Axes
@@ -116,24 +156,30 @@ class ImgPlot:
 	summary: str | None
 	loss_steps: list[int]
 	loss_values: list[float]
+	attempt_label: str | None
+	ssim_text: Any
 
 	def __init__(self, gs: SubplotSpec, init_img: Tensor, title="Recovered Image", loss: float | None = None,
-	             show_loss=True, summary: str | None = None):
+	             show_loss=True, summary: str | None = None, ssim: float | None = None):
 		self.gs = gs
 		self.subgs = gs.subgridspec(3, 1, height_ratios=[3.0, 1.55, 0.28], hspace=0.55)
 		self.title = title
 		self.summary = summary
 		self.loss_steps = []
 		self.loss_values = []
+		self.attempt_label = None
 
-		self.img_history = [(0, _process_img(init_img), loss)]
+		self.img_history = [(0, _process_img(init_img), loss, ssim)]
 
 		self.ax_img = plt.gcf().add_subplot(self.subgs[0])
 		self.img = self.ax_img.imshow(self.img_history[0][1], aspect="equal")
 		self.ax_img.set_box_aspect(1)
 		self.ax_img.set_anchor("C")
 		self.ax_img.set_axis_off()
+		self.ssim_text = self.ax_img.text(0.5, -0.04, "", transform=self.ax_img.transAxes,
+		                                  ha="center", va="top", fontsize=8)
 		self._set_image_title(0)
+		self._set_ssim_text(ssim)
 		if summary:
 			label = AnchoredText(summary, loc="lower left", prop={"size": 7}, frameon=True, borderpad=0.3)
 			label.patch.set_alpha(0.75)
@@ -161,7 +207,10 @@ class ImgPlot:
 		self.slider.on_changed(lambda val: self.update_plot())
 
 	def _set_image_title(self, iter_num: int):
-		self.ax_img.set_title(f"{self.title} (i={iter_num})")
+		label = f"i={iter_num}"
+		if self.attempt_label:
+			label = f"{self.attempt_label}, {label}"
+		self.ax_img.set_title(f"{self.title} ({label})")
 
 	def _set_loss_title(self, loss: float | None):
 		if self.loss_line is None:
@@ -169,16 +218,21 @@ class ImgPlot:
 		loss_text = format_loss_value(loss)
 		self.ax_loss.set_title("Loss" if loss_text is None else f"Loss = {loss_text}", fontsize=9)
 
+	def _set_ssim_text(self, ssim: float | None):
+		ssim_text = format_ssim_value(ssim)
+		self.ssim_text.set_text("" if ssim_text is None else f"SSIM = {ssim_text}")
+
 	def update_plot(self):
 		idx = min(int(self.slider.val), len(self.img_history) - 1)
-		iter_num, img, loss = self.img_history[idx]
+		iter_num, img, loss, ssim = self.img_history[idx]
 		self.img.set_data(img)
 		self._set_image_title(iter_num)
 		self._set_loss_title(loss)
+		self._set_ssim_text(ssim)
 		redraw_plot()
 
-	def add_processed_img(self, img, idx, loss: float | None = None):
-		self.img_history.append((idx, img, loss))
+	def add_processed_img(self, img, idx, loss: float | None = None, ssim: float | None = None):
+		self.img_history.append((idx, img, loss, ssim))
 		slider = self.slider
 		try:
 			set_latest = slider.val >= slider.valmax
@@ -191,8 +245,30 @@ class ImgPlot:
 		except NameError:
 			pass
 
-	def add_img(self, img, idx, loss: float | None = None):
-		self.add_processed_img(_process_img(img), idx, loss)
+	def add_img(self, img, idx, loss: float | None = None, ssim: float | None = None):
+		self.add_processed_img(_process_img(img), idx, loss, ssim)
+
+	def load_recorded(self, recorded: list[tuple[int, Tensor, float | None, float | None]],
+	                  loss_history: list[float] | None = None):
+		if not recorded:
+			return
+		self.attempt_label = None
+		self.img_history = [(step, _process_img(img), loss, ssim) for step, img, loss, ssim in recorded]
+
+		self.loss_steps = []
+		self.loss_values = []
+		if self.loss_line is not None:
+			self.loss_line.set_data([], [])
+			if loss_history:
+				self.add_losses(list(enumerate(loss_history, start=1)))
+			else:
+				self.add_losses([(step, loss) for step, _, loss, _ in recorded if loss is not None])
+
+		slider = self.slider
+		slider.valmax = max(len(self.img_history) - 1, 1)
+		slider.ax.set_xlim((slider.valmin, slider.valmax))
+		slider.set_val(slider.valmax)
+		self.update_plot()
 
 	def add_losses(self, points: list[tuple[int, float]]):
 		if self.loss_line is None or not points:
@@ -245,10 +321,10 @@ class ExperimentConfig:
 	max_iterations: int = 5000
 	timeout: int = 15 * 60
 	optimizer: str = "LBFGS"
-	lr: float = 0.01
+	lr: float = 1.
 	seed: int = 0
 	resolution: int = 32
-	model: str = "LeNet"
+	model: str = "LeNet1"
 	img: str = "CXR:0"
 	target_mixin: float = 0.
 	noise_mixin: float = 0.
@@ -259,15 +335,19 @@ class ExperimentConfig:
 	dp_sample_rate: float = 1.
 	dp_steps: int = 1
 	dp_accountant: str = "rdp"
+	weight_decay: float | None = None
+	quantize: bool = False
 
 
 def recover_image(model: nn.Module, gradients: List[Tensor], img: Tensor, labels: Tensor, criterion: nn.Module,
                   config: ExperimentConfig, *,
                   iter_callback: Callable[[int, Tensor, float], Any] | None = None,
                   rng: torch.Generator | None = None, stop: threading.Event | None = None, log_prefix=""):
-	optimizer = OPTIMIZERS[config.optimizer]([img, labels], lr=config.lr)
+	optimizer = OPTIMIZERS[config.optimizer]([img, labels], lr=config.lr, **({} if config.weight_decay is None else {'weight_decay': config.weight_decay}))
+	# optimizer = OPTIMIZERS[config.optimizer]([img, ], lr=config.lr) # iDLG
 	img.requires_grad = True
 	labels.requires_grad = True
+	# labels.requires_grad = False # iDLG
 
 	i = 0
 	start_time = time.time()
@@ -328,7 +408,7 @@ def adapt_input_to_model(inp, model, transform=None):
 		channels = 1
 	else:
 		x_view = None
-		if isinstance(model, (SimpleNet, SampleConvNet, LeNet1)):
+		if isinstance(model, (SimpleNet, SampleConvNet, LeNet1)) or getattr(model, "monochrome", False):
 			channels = 1
 		else:
 			channels = 3
@@ -355,7 +435,8 @@ def make_transform(resolution: int):
 		v2.ToImage(),
 		v2.ToDtype(torch.float32, scale=True),
 		v2.CenterCrop([resolution, resolution]),
-		torch.nan_to_num
+		torch.nan_to_num,
+		v2.Normalize(mean=[NORM_MEAN], std=[NORM_STD])
 	])
 
 
@@ -387,15 +468,17 @@ def resolve_dp_noise_multiplier(config: ExperimentConfig) -> float:
 
 
 def gradinversion(model: nn.Module, inp, truth_label: Tensor, config: ExperimentConfig, *, gs=None, gs_target=None,
-				  plot_callback: Callable[[int, Tensor | None, float | None], Any] | None = None,
-				  target_callback: Callable[[Tensor], Any] | None = None, run_name: str | None = None, **_):
+                  plot_callback: Callable[[int, Tensor | None, float | None, float | None], Any] | None = None,
+                  target_callback: Callable[[Tensor], Any] | None = None, run_name: str | None = None, **_):
 	log_prefix = "" if run_name is None else f"[{run_name}] "
 	model = make_model_dp_compatible(model).to(config.device)
-	# criterion = nn.BCEWithLogitsLoss(pos_weight=xray_params.CLASS_WEIGHTS.to(device))
+	# criterion = nn.BCEWithLogitsLoss(pos_weight=xray_data.CLASS_POS_WEIGHTS.to(config.device))
 	criterion = nn.BCEWithLogitsLoss()
+	# criterion = nn.CrossEntropyLoss() # iDLG
 	dp_noise = resolve_dp_noise_multiplier(config)
 
 	truth_image, truth_label = prepare_truth_tensors(model, inp, truth_label, config.resolution, config.device)
+	target_processed = _process_img(truth_image).numpy()
 	rng = torch.Generator(device=truth_image.device)
 	rng.manual_seed(config.seed)
 	if target_callback is not None:
@@ -408,10 +491,6 @@ def gradinversion(model: nn.Module, inp, truth_label: Tensor, config: Experiment
 	print(f"{log_prefix}{truth_image.min()} {truth_image.max()} {recovered_image.min()} {recovered_image.max()}")
 	recovered_image = (1. - config.target_mixin) * recovered_image + config.target_mixin * truth_image
 
-	recovered_label_logits = torch.randn(truth_label.shape, dtype=truth_label.dtype, device=truth_label.device, generator=rng)
-
-	print(f"{log_prefix}Total model parameters: {sum([torch.numel(p) for p in model.parameters()])}")
-	print(f"{log_prefix}Total gradinversion parameters: {sum([torch.numel(recovered_image), torch.numel(recovered_label_logits)])}")
 	if config.dp_epsilon is not None:
 		print(
 			f"{log_prefix}DP target: epsilon={config.dp_epsilon:g}, delta={config.dp_delta:g}, "
@@ -419,9 +498,10 @@ def gradinversion(model: nn.Module, inp, truth_label: Tensor, config: Experiment
 			f"accountant={config.dp_accountant}, sigma={dp_noise:g}"
 		)
 
-	plot = None if gs is None else ImgPlot(gs, recovered_image, title=run_name or "Recovered Image")
+	initial_ssim = image_ssim(recovered_image, target_processed)
+	plot = None if gs is None else ImgPlot(gs, recovered_image, title=run_name or "Recovered Image", ssim=initial_ssim)
 	if plot_callback is not None:
-		plot_callback(0, recovered_image, None)
+		plot_callback(0, recovered_image, None, initial_ssim)
 
 	model.eval()
 	model.zero_grad()
@@ -432,31 +512,55 @@ def gradinversion(model: nn.Module, inp, truth_label: Tensor, config: Experiment
 
 	real_grads = torch.autograd.grad(loss, model.parameters())
 	real_grads = [g.detach().clone() for g in real_grads]
-	grads_p2 = torch.cat([g.flatten() for g in real_grads]).norm(p=2)
+	flat_grads = torch.cat([g.flatten() for g in real_grads])
+	grads_p2 = flat_grads.norm(p=2)
+	print(f"actual gradient norm: {grads_p2}, min {flat_grads.min()}, max {flat_grads.max()}, std {flat_grads.std()}")
 	real_grads = [g * min(1, config.clipping_norm / grads_p2) for g in real_grads]
+	flat_grads = torch.cat([g.flatten() for g in real_grads])
+	grads_p2 = flat_grads.norm(p=2)
+	print(f"clipped gradient norm: {grads_p2}, min {flat_grads.min()}, max {flat_grads.max()}, std {flat_grads.std()}")
 	# Apply DP noise
 	real_grads = [
 		g + torch.normal(mean=0, std=dp_noise * config.clipping_norm, size=g.shape, dtype=g.dtype, device=g.device, generator=rng)
+		if not config.quantize else
+		g + (torch.rand(size=g.shape, dtype=g.dtype, device=g.device, generator=rng) - 0.5) * (math.sqrt(12) * dp_noise * config.clipping_norm)
 		for g in real_grads
 	]
+	with torch.no_grad():
+		grad_flat = torch.cat([g.flatten() for g in real_grads])
+		print(f"{log_prefix}real grads: {grad_flat.min():.3E}/{grad_flat.max():.3E}/{grad_flat.std():.3E}, p2={grad_flat.norm(p=2):.3E}")
+		del grad_flat
+
+	label_pred = torch.randn(truth_label.shape, dtype=truth_label.dtype, device=truth_label.device, generator=rng)
+	# label_pred = torch.argmin(torch.sum(real_grads[-2], dim=-1), dim=-1).detach().reshape((1,)).requires_grad_(False) # iDLG
+	# label_pred = one_hot(torch.argmin(torch.sum(real_grads[-2], dim=-1), dim=-1), truth_label.shape[-1]).to(torch.float32).detach().reshape((1,-1)).requires_grad_(False) # iDLG
+	# print(f"{log_prefix}Target label: {truth_label}, Predicted label: {label_pred}")
+
+	print(f"{log_prefix}Total model parameters: {sum([torch.numel(p) for p in model.parameters()])}")
+	print(f"{log_prefix}Total gradinversion parameters: {sum([torch.numel(recovered_image), torch.numel(label_pred)])}")
 
 	loss_history = []
 
 	def callback(i, img, loss):
 		loss_history.append(loss)
 		should_add_image = i < 10 or (i < 1000 and i % 20 == 0) or i % 100 == 0
+		ssim_val = image_ssim(img, target_processed) if should_add_image else None
 		if plot_callback is not None:
-			plot_callback(i, img if should_add_image else None, loss)
+			plot_callback(i, img if should_add_image else None, loss, ssim_val)
 		if plot is not None:
 			plot.add_losses([(i, loss)])
 			if should_add_image:
-				plot.add_img(img, i)
+				plot.add_img(img, i, loss, ssim_val)
 				redraw_plot()
 
-	recover_image(model, real_grads, recovered_image, recovered_label_logits, criterion,
+	recover_image(model, real_grads, recovered_image, label_pred, criterion,
 	              config=config, iter_callback=callback, rng=rng, stop=stop_event, log_prefix=log_prefix)
+	# recover_image(model, real_grads, recovered_image, truth_label, criterion,
+	#   config=config, iter_callback=callback, rng=rng, stop=stop_event, log_prefix=log_prefix)
 
-	return loss_history
+	final_ssim = image_ssim(recovered_image, target_processed)
+	print(f"{log_prefix}Final SSIM = {format_ssim_value(final_ssim) or 'n/a'}")
+	return loss_history, final_ssim
 
 
 def load_sample(path):
@@ -465,9 +569,15 @@ def load_sample(path):
 
 
 CONFIG_LABELS = {
-	"model": "model",
+	"device": "dev",
+	"max_iterations": "iters",
+	"timeout": "timeout",
 	"optimizer": "opt",
+	"lr": "lr",
+	"seed": "seed",
 	"resolution": "R",
+	"model": "model",
+	"img": "img",
 	"target_mixin": "target-mix",
 	"noise_mixin": "noise",
 	"clipping_norm": "C",
@@ -477,7 +587,40 @@ CONFIG_LABELS = {
 	"dp_sample_rate": "q",
 	"dp_steps": "steps",
 	"dp_accountant": "acct",
+	"weight_decay": "w_decay",
+	"quantize": "quantize"
 }
+
+DEFAULT_LABEL_FIELDS = (
+	"model", "optimizer", "resolution", "target_mixin", "noise_mixin", "clipping_norm",
+	"dp_noise", "dp_epsilon", "dp_delta", "dp_sample_rate", "dp_steps", "dp_accountant",
+	"weight_decay", "quantize"
+)
+
+
+def parse_label_fields(spec: str | None) -> tuple[str, ...]:
+	if spec is None:
+		return DEFAULT_LABEL_FIELDS
+	value = spec.strip()
+	if value.lower() in {"", "none"}:
+		return ()
+	if value.lower() == "all":
+		return tuple(CONFIG_LABELS)
+	fields: list[str] = []
+	unknown: list[str] = []
+	for part in value.split(','):
+		key = part.strip().replace('-', '_')
+		if not key:
+			continue
+		if key not in CONFIG_LABELS:
+			unknown.append(part.strip())
+		elif key not in fields:
+			fields.append(key)
+	if unknown:
+		raise ValueError(
+			f"Unknown label field(s): {', '.join(unknown)}. Available: {', '.join(CONFIG_LABELS)}"
+		)
+	return tuple(fields)
 
 
 def format_config_value(value: Any):
@@ -486,15 +629,18 @@ def format_config_value(value: Any):
 	return str(value)
 
 
-def format_config_summary(config: ExperimentConfig, baselines=(ExperimentConfig(),), *, max_items=6, per_line=2):
+def format_config_summary(config: ExperimentConfig, baselines=(ExperimentConfig(),), *,
+                          labels: tuple[str, ...] | None = None, max_items=6, per_line=2):
+	label_fields = DEFAULT_LABEL_FIELDS if labels is None else labels
 	items = []
 	for field in dataclasses.fields(ExperimentConfig):
 		name = field.name
+		if name not in label_fields or name not in CONFIG_LABELS:
+			continue
 		value = getattr(config, name)
 		if any(value != getattr(baseline, name) for baseline in baselines):
-			if name in CONFIG_LABELS:
-				label = CONFIG_LABELS.get(name, name.replace("_", "-"))
-				items.append(f"{label}={format_config_value(value)}")
+			label = CONFIG_LABELS.get(name, name.replace("_", "-"))
+			items.append(f"{label}={format_config_value(value)}")
 
 	if not items:
 		return "defaults"
@@ -522,6 +668,8 @@ class ParsedArgs:
 	experiments: list[ExperimentSpec]
 	workers: int
 	output: str | None
+	best_of: int
+	label_fields: tuple[str, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -530,12 +678,16 @@ class RunUpdate:
 	step: int
 	loss: float | None
 	img: Tensor | None = None
+	ssim: float | None = None
+	attempt: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class DoneUpdate:
 	run_idx: int
 	loss_history: list[float]
+	ssim: float | None = None
+	recorded: list[tuple[int, Tensor, float | None, float | None]] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -565,6 +717,8 @@ def add_config_args(parser: argparse.ArgumentParser, *, defaults: bool):
 	parser.add_argument("--dp-sample-rate", type=float, default=default, help="Sample rate used by the Opacus accountant")
 	parser.add_argument("--dp-steps", type=int, default=default, help="Number of DP steps used by the Opacus accountant")
 	parser.add_argument("--dp-accountant", choices=["rdp", "gdp", "prv"], default=default, help="Opacus accountant mechanism")
+	parser.add_argument("--weight-decay", type=float, default=default, help="Optimizer weight decay")
+	parser.add_argument("--quantize", type=lambda x: x.lower() in ['true', 'yes'], default=default, help="Attempt equivalent perturbation using quantization noise")
 	parser.add_argument("--name", default=default, help="Display name for this run")
 
 
@@ -573,6 +727,8 @@ def make_config_parser(add_help=False):
 	add_config_args(parser, defaults=False)
 	parser.add_argument("--workers", type=int, default=argparse.SUPPRESS, help="Maximum worker threads (default: one per run)")
 	parser.add_argument("--output", "-o", default=argparse.SUPPRESS, help="Save the final visualization to this image file")
+	parser.add_argument("--best-of", type=int, default=argparse.SUPPRESS, help="Repeat each experiment this many times (seed incremented each time) and keep the run with the best SSIM")
+	parser.add_argument("--labels", default=argparse.SUPPRESS, help="Comma-separated config fields to show as labels ('all', 'none', or e.g. model,lr,seed)")
 	return parser
 
 
@@ -582,13 +738,18 @@ def make_help_parser():
 		epilog=(
 			"Options outside --run mutate the current baseline. --run creates an experiment from that "
 			"baseline plus comma-separated overrides that do not affect later runs. Example: "
-			"--seed 0 --lr 0.1 --opt Adam --run seed=1 --run seed=2 --opt SGD --run lr=0.01."
+			"--seed 0 --lr 0.1 --opt Adam --run seed=1 --run seed=2 --opt SGD --run lr=0.01. "
+			"--best-of N repeats each experiment N times with incrementing seeds and keeps the run "
+			"with the highest SSIM to the target."
 		)
 	)
 	add_config_args(parser, defaults=True)
 	parser.set_defaults(**dataclasses.asdict(ExperimentConfig()), name=None)
 	parser.add_argument("--workers", type=int, default=None, help="Maximum worker threads (default: one per run)")
 	parser.add_argument("--output", "-o", default=None, help="Save the final visualization to this image file")
+	parser.add_argument("--best-of", type=int, default=1, help="Repeat each experiment this many times (seed incremented each time) and keep the run with the best SSIM")
+	parser.add_argument("--labels", default=None,
+	                    help=f"Comma-separated config fields to show as labels ('all', 'none', or a subset of: {', '.join(CONFIG_LABELS)})")
 	parser.add_argument("--run", "--experiment", nargs="?", metavar="OVERRIDES",
 	                    help="Create an experiment from the current baseline plus overrides like seed=1,lr=0.1")
 	return parser
@@ -635,11 +796,13 @@ def parse_args(argv: list[str] | None = None):
 	next_name: str | None = None
 	workers: int | None = None
 	output: str | None = None
+	best_of: int = 1
+	labels_spec: str | None = None
 	experiments: list[ExperimentSpec] = []
 	pending_tokens: list[str] = []
 
 	def apply_pending():
-		nonlocal config, next_name, workers, output, pending_tokens
+		nonlocal config, next_name, workers, output, best_of, labels_spec, pending_tokens
 		if not pending_tokens:
 			return
 		overrides = vars(parser.parse_args(expand_key_value_args(pending_tokens)))
@@ -648,6 +811,10 @@ def parse_args(argv: list[str] | None = None):
 			workers = overrides.pop("workers")
 		if "output" in overrides:
 			output = overrides.pop("output")
+		if "best_of" in overrides:
+			best_of = overrides.pop("best_of")
+		if "labels" in overrides:
+			labels_spec = overrides.pop("labels")
 		if "name" in overrides:
 			next_name = overrides.pop("name")
 		config = dataclasses.replace(config, **overrides)
@@ -663,8 +830,8 @@ def parse_args(argv: list[str] | None = None):
 				i += 1
 			run_name, run_args = expand_run_spec(run_spec)
 			run_overrides = vars(parser.parse_args(run_args))
-			if "workers" in run_overrides or "output" in run_overrides:
-				parser.error("--workers and --output are global options and cannot be used inside --run overrides")
+			if any(k in run_overrides for k in ("workers", "output", "best_of", "labels")):
+				parser.error("--workers, --output, --best-of and --labels are global options and cannot be used inside --run overrides")
 			run_config = dataclasses.replace(config, **run_overrides)
 			name = run_name or next_name or f"run {len(experiments) + 1}"
 			experiments.append(ExperimentSpec(len(experiments), name, run_config, config))
@@ -680,7 +847,12 @@ def parse_args(argv: list[str] | None = None):
 
 	if workers is None:
 		workers = len(experiments)
-	return ParsedArgs(experiments, workers=max(1, workers), output=output)
+	try:
+		label_fields = parse_label_fields(labels_spec)
+	except ValueError as e:
+		parser.error(str(e))
+	return ParsedArgs(experiments, workers=max(1, workers), output=output, best_of=max(1, best_of),
+	                  label_fields=label_fields)
 
 
 def load_experiment_components(config: ExperimentConfig):
@@ -688,31 +860,58 @@ def load_experiment_components(config: ExperimentConfig):
 	if len(img_split) != 2 or img_split[0] not in DATASETS:
 		raise ValueError(f"Invalid image spec {config.img!r}; expected dataset:idx")
 	dataset = DATASETS[img_split[0]]
-	inp, target = dataset[int(img_split[1])]
-	if type(target) is int:
-		target = one_hot(torch.tensor(target), len(dataset.classes)).to(dtype=torch.float32)
+	inp, target_ = dataset[int(img_split[1])]
+	if type(target_) is int:
+		target_ = one_hot(torch.tensor(target_), len(dataset.classes)).to(dtype=torch.float32)
+	# target = torch.zeros_like(target_)
+	# target[torch.nonzero(target_)[0]] = 1. # convert to single-label classification
+	target = target_
 	model = MODELS[config.model](num_classes=len(dataset.classes), resolution=config.resolution)
 	return model, inp, target
 
 
-def run_experiment(spec: ExperimentSpec, updates: queue.Queue[RunUpdate | DoneUpdate | ErrorUpdate]):
+def run_experiment(spec: ExperimentSpec, updates: queue.Queue[RunUpdate | DoneUpdate | ErrorUpdate], best_of: int = 1):
 	try:
-		print(f"[{spec.name}] Running with config: {spec.config}")
-		model, inp, target = load_experiment_components(spec.config)
+		best_of = max(1, best_of)
+		suffix = "" if best_of == 1 else f" (best of {best_of})"
+		print(f"[{spec.name}] Running with config: {spec.config}{suffix}")
 
-		def plot_callback(step: int, img: Tensor | None, loss: float | None):
-			plot_img = None if img is None else img.detach().cpu().clone()
-			updates.put(RunUpdate(spec.idx, step, loss, plot_img))
+		have_best = False
+		best_ssim: float | None = None
+		best_recorded: list[tuple[int, Tensor, float | None, float | None]] = []
+		best_loss_history: list[float] = []
 
-		loss_history = gradinversion(
-			model=model,
-			inp=inp,
-			truth_label=target,
-			config=spec.config,
-			plot_callback=plot_callback,
-			run_name=spec.name
-		)
-		updates.put(DoneUpdate(spec.idx, loss_history))
+		for attempt in range(best_of):
+			attempt_config = spec.config if best_of == 1 else dataclasses.replace(spec.config, seed=spec.config.seed + attempt)
+			attempt_label = None if best_of == 1 else f"try {attempt + 1}/{best_of}"
+			model, inp, target = load_experiment_components(attempt_config)
+			recorded: list[tuple[int, Tensor, float | None, float | None]] = []
+
+			def plot_callback(step: int, img: Tensor | None, loss: float | None, ssim: float | None,
+			                  _recorded=recorded, _label=attempt_label):
+				plot_img = None if img is None else img.detach().cpu().clone()
+				if plot_img is not None:
+					_recorded.append((step, plot_img, loss, ssim))
+				updates.put(RunUpdate(spec.idx, step, loss, plot_img, ssim, _label))
+
+			loss_history, final_ssim = gradinversion(
+				model=model,
+				inp=inp,
+				truth_label=target,
+				config=attempt_config,
+				plot_callback=plot_callback,
+				run_name=spec.name if best_of == 1 else f"{spec.name} {attempt_label}"
+			)
+
+			run_ssim = recorded[-1][3] if recorded else final_ssim
+			is_better = not have_best or (run_ssim is not None and (best_ssim is None or run_ssim > best_ssim))
+			if is_better:
+				have_best = True
+				best_ssim = run_ssim
+				best_recorded = recorded
+				best_loss_history = loss_history
+
+		updates.put(DoneUpdate(spec.idx, best_loss_history, best_ssim, best_recorded))
 	except Exception as e:
 		updates.put(ErrorUpdate(spec.idx, e, traceback.format_exc()))
 
@@ -725,9 +924,10 @@ def make_target_image(spec: ExperimentSpec):
 
 def process_plot_updates(updates: list[RunUpdate | DoneUpdate | ErrorUpdate], run_plots: dict[int, ImgPlot],
                          loss_histories: dict[int, list[float]], errors: list[ErrorUpdate],
-                         grid: GridSpec, specs: list[ExperimentSpec]):
+                         grid: GridSpec, specs: list[ExperimentSpec], label_fields: tuple[str, ...] = DEFAULT_LABEL_FIELDS):
 	loss_batches: dict[int, list[tuple[int, float]]] = {}
 	image_updates: dict[int, RunUpdate] = {}
+	done_updates: dict[int, DoneUpdate] = {}
 
 	for update in updates:
 		match update:
@@ -736,9 +936,11 @@ def process_plot_updates(updates: list[RunUpdate | DoneUpdate | ErrorUpdate], ru
 					loss_batches.setdefault(run_idx, []).append((step, loss))
 				if img is not None:
 					image_updates[run_idx] = update
-			case DoneUpdate(run_idx=run_idx, loss_history=loss_history):
+			case DoneUpdate(run_idx=run_idx, loss_history=loss_history, ssim=ssim) as done:
 				loss_histories[run_idx] = loss_history
-				print(f"[{specs[run_idx].name}] Finished after {len(loss_history)} optimization steps")
+				done_updates[run_idx] = done
+				ssim_text = format_ssim_value(ssim) or "n/a"
+				print(f"[{specs[run_idx].name}] Finished after {len(loss_history)} optimization steps (best SSIM = {ssim_text})")
 			case ErrorUpdate(run_idx=run_idx) as error:
 				errors.append(error)
 				print(f"[{specs[run_idx].name}] Failed: {error.error}")
@@ -746,12 +948,20 @@ def process_plot_updates(updates: list[RunUpdate | DoneUpdate | ErrorUpdate], ru
 	for spec in specs:
 		plot = run_plots.get(spec.idx)
 		img_update = image_updates.get(spec.idx)
+		done = done_updates.get(spec.idx)
 		created_plot = False
-		if plot is None and img_update is not None:
+
+		init_img = init_loss = init_ssim = None
+		if img_update is not None:
+			init_img, init_loss, init_ssim = img_update.img, img_update.loss, img_update.ssim
+		elif done is not None and done.recorded:
+			_, init_img, init_loss, init_ssim = done.recorded[0]
+
+		if plot is None and init_img is not None:
 			plot = ImgPlot(
-				grid[0, spec.idx + 1], img_update.img,
-				title=spec.name, loss=img_update.loss,
-				summary=format_config_summary(spec.config, baselines=(ExperimentConfig(), spec.baseline))
+				grid[0, spec.idx + 1], init_img,
+				title=spec.name, loss=init_loss, ssim=init_ssim,
+				summary=format_config_summary(spec.config, baselines=(ExperimentConfig(), spec.baseline), labels=label_fields)
 			)
 			run_plots[spec.idx] = plot
 			created_plot = True
@@ -759,7 +969,10 @@ def process_plot_updates(updates: list[RunUpdate | DoneUpdate | ErrorUpdate], ru
 			continue
 		plot.add_losses(loss_batches.get(spec.idx, []))
 		if img_update is not None and not created_plot:
-			plot.add_img(img_update.img, img_update.step, img_update.loss)
+			plot.attempt_label = img_update.attempt
+			plot.add_img(img_update.img, img_update.step, img_update.loss, img_update.ssim)
+		if done is not None:
+			plot.load_recorded(done.recorded, done.loss_history)
 
 
 def make_figure(num_experiments: int):
@@ -799,9 +1012,10 @@ def main():
 	loss_histories: dict[int, list[float]] = {}
 	errors: list[ErrorUpdate] = []
 
-	print(f"Starting {len(specs)} experiment(s) on {parsed.workers} worker thread(s)")
+	best_of_note = "" if parsed.best_of == 1 else f", best of {parsed.best_of} per experiment"
+	print(f"Starting {len(specs)} experiment(s) on {parsed.workers} worker thread(s){best_of_note}")
 	with concurrent.futures.ThreadPoolExecutor(max_workers=parsed.workers, thread_name_prefix="gradinv") as executor:
-		futures = [executor.submit(run_experiment, spec, updates) for spec in specs]
+		futures = [executor.submit(run_experiment, spec, updates, parsed.best_of) for spec in specs]
 
 		while True:
 			batch: list[RunUpdate | DoneUpdate | ErrorUpdate] = []
@@ -813,7 +1027,7 @@ def main():
 				pass
 
 			if batch:
-				process_plot_updates(batch, run_plots, loss_histories, errors, grid, specs)
+				process_plot_updates(batch, run_plots, loss_histories, errors, grid, specs, parsed.label_fields)
 				redraw_plot()
 
 			plt.pause(0.05)
@@ -834,10 +1048,12 @@ def main():
 		output_dir = os.path.dirname(parsed.output)
 		if output_dir:
 			os.makedirs(output_dir, exist_ok=True)
+		import subprocess
+		print(subprocess.getoutput('date'))
 		fig.savefig(parsed.output, dpi=300)
 		print(f"Saved visualization to {parsed.output}")
 		sys.exit()
-
+		print(f"Couldn't exit")
 
 	plt.ioff()
 	plt.show()

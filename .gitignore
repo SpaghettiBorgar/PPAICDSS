@@ -1,7 +1,6 @@
 .ipynb_checkpoints
 venv*
 .venv
-*.env
 setup
 core.*
 .idea/
@@ -19,3 +18,6 @@ build/
 dist/
 wheels/
 *.egg-info
+batches/
+stuff/
+profiler_logs/

@@ -6,20 +6,22 @@ from models.xray_cnn import *
 from training import trainer
 from training.params import Params
 from training.xray.xray_params import XrayParams
-from util.sampler import BlockShuffleBatchSampler
+from util import numa
 from util.dp_compat import make_private_auto
-
-def register_faulthandler(*args):
-	__import__('faulthandler').enable()
+from util.sampler import BlockShuffleBatchSampler
 
 
-def make_loader_args(num_workers: int = 0, **kwargs):
+def make_loader_args(num_workers: int = 0, device=None, **kwargs):
 	return dict(
 		pin_memory=True,
+		# pin_memory_device=device,
 		num_workers=num_workers,
 		prefetch_factor=4 if num_workers > 0 else None,
 		persistent_workers=num_workers > 0,
-		worker_init_fn=register_faulthandler if num_workers > 0 else None,
+		worker_init_fn=numa.WorkerInit(device) if num_workers > 0 else None,
+		# Python 3.14 defaults to forkserver, which would not inherit the shm manager
+		# handles and module globals the chunk cache relies on
+		multiprocessing_context='fork' if num_workers > 0 else None,
 		**kwargs
 	)
 
@@ -36,7 +38,7 @@ def make_train_loader(params: Params, dataset: Dataset, **kwargs):
 
 def make_test_loader(params: Params, dataset: Dataset, **kwargs):
 	loader_args = make_loader_args(**kwargs)
-	test_loader_args = dict(batch_size=params.batch_size)
+	test_loader_args = dict(batch_size=params.batch_size, shuffle=False)
 	return DataLoader(dataset=dataset, **(loader_args | test_loader_args))
 
 
@@ -55,7 +57,8 @@ def train_xray_model(phase, checkpoint, device, **extra_params):
 		len(training_data), data_prep.chunk_size, block_size=data_prep.chunk_size // 4, batch_size=params.batch_size)
 
 	loader_args = dict(
-		num_workers=min(os.cpu_count() or 0, int(os.getenv("DATA_LOADER_WORKERS", 6)))
+		num_workers=min(os.cpu_count() or 0, int(os.getenv("DATA_LOADER_WORKERS", 6))),
+		device=params.device
 	)
 
 	train_dataloader = make_train_loader(params, training_data, **loader_args)
